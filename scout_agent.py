@@ -2,6 +2,7 @@ import os
 import json
 import sys
 import hashlib
+import subprocess
 from datetime import datetime
 from google import genai
 from google.genai import types
@@ -11,8 +12,9 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-# Edit the dict below with your real positions
-PORTFOLIO_DETAIL = {
+# Default portfolio - used only on first run if portfolio.json doesn't exist yet.
+# After that, edits happen via Telegram messages.
+DEFAULT_PORTFOLIO = {
     "AMZN":  {"shares": 3.13269,  "avg_cost": 223.28},
     "ASTS":  {"shares": 7.83626,  "avg_cost": 63.85},
     "AVGO":  {"shares": 1.45697,  "avg_cost": 343.19},
@@ -28,9 +30,13 @@ PORTFOLIO_DETAIL = {
     "TSLA":  {"shares": 0.28565,  "avg_cost": 349.63},
     "TSM":   {"shares": 1.87983,  "avg_cost": 265.50},
 }
-PORTFOLIO = list(PORTFOLIO_DETAIL.keys())
 
-# Watchlist for opportunity scanning across sectors
+PORTFOLIO_FILE = "portfolio.json"
+CACHE_FILE = "scout_cache.json"
+MODEL_LIGHT = "gemini-2.5-flash-lite"
+MODEL_DEEP  = "gemini-2.5-flash"
+NORMAL_MULTIPLES = {"pe": 22, "ps": 6, "pb": 4}
+
 WATCHLIST_BY_SECTOR = {
     "Semis":         ["AMD","INTC","MRVL","QCOM","ARM","ASML","AMAT","LRCX","KLAC","SMCI"],
     "Cloud_SaaS":    ["NOW","PANW","ZS","DDOG","SNOW","MDB","NET","OKTA","WDAY","ADBE"],
@@ -40,24 +46,32 @@ WATCHLIST_BY_SECTOR = {
     "EV_Auto":       ["RIVN","LCID","F","GM"],
     "Sector_ETFs":   ["XLK","SOXX","IGV","ARKX","XLC"],
 }
-WATCHLIST = sorted(set(sum(WATCHLIST_BY_SECTOR.values(), [])) | set(PORTFOLIO))
 
-RSS_FEEDS = [
+RSS_FEEDS_BASE = [
     "https://www.cnbc.com/id/100003114/device/rss/rss.html",
     "https://www.cnbc.com/id/10000664/device/rss/rss.html",
     "https://www.cnbc.com/id/19854910/device/rss/rss.html",
     "https://feeds.marketwatch.com/marketwatch/topstories/",
     "https://seekingalpha.com/market_currents.xml",
 ]
-for t in PORTFOLIO:
-    RSS_FEEDS.append(f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={t}&region=US&lang=en-US")
 
-CACHE_FILE = "scout_cache.json"
-MODEL_LIGHT = "gemini-2.5-flash-lite"
-MODEL_DEEP  = "gemini-2.5-flash"
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
-NORMAL_MULTIPLES = {"pe": 22, "ps": 6, "pb": 4}
+
+# PORTFOLIO PERSISTENCE
+def load_portfolio():
+    if os.path.exists(PORTFOLIO_FILE):
+        try:
+            with open(PORTFOLIO_FILE) as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"portfolio load err: {e}, using defaults")
+    return dict(DEFAULT_PORTFOLIO)
+
+
+def save_portfolio(p):
+    with open(PORTFOLIO_FILE, "w") as f:
+        json.dump(p, f, indent=2, sort_keys=True)
 
 
 # CACHE
@@ -66,7 +80,7 @@ def load_cache():
         with open(CACHE_FILE) as f:
             return json.load(f)
     except FileNotFoundError:
-        return {"seen_news": [], "fundamentals": {}}
+        return {"seen_news": [], "fundamentals": {}, "last_telegram_offset": 0}
 
 
 def save_cache(c):
@@ -76,9 +90,16 @@ def save_cache(c):
 
 
 # NEWS
-def fetch_news():
+def get_rss_feeds(portfolio_keys):
+    feeds = list(RSS_FEEDS_BASE)
+    for t in portfolio_keys:
+        feeds.append(f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={t}&region=US&lang=en-US")
+    return feeds
+
+
+def fetch_news(portfolio_keys):
     items = []
-    for url in RSS_FEEDS:
+    for url in get_rss_feeds(portfolio_keys):
         try:
             feed = feedparser.parse(url)
             for e in feed.entries[:20]:
@@ -270,9 +291,227 @@ def call_gemini(prompt, max_tokens=600, json_mode=False, model=None):
     return response.text
 
 
+# TELEGRAM
+def telegram_send(text):
+    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    chat = os.environ["TELEGRAM_CHAT_ID"]
+
+    # Smart chunking - split at line boundaries to avoid breaking markdown
+    chunks = []
+    current = ""
+    for line in text.split("\n"):
+        if len(current) + len(line) + 1 > 3800:
+            if current:
+                chunks.append(current)
+                current = line
+            else:
+                chunks.append(line[:3800])
+                current = line[3800:]
+        else:
+            current = (current + "\n" + line) if current else line
+    if current:
+        chunks.append(current)
+
+    for chunk in chunks:
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data={"chat_id": chat, "text": chunk, "parse_mode": "Markdown"},
+                timeout=10,
+            )
+            # If markdown parse fails, retry as plain text
+            if r.status_code != 200:
+                requests.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    data={"chat_id": chat, "text": chunk},
+                    timeout=10,
+                )
+        except Exception as e:
+            print(f"tg send err: {e}")
+
+
+def telegram_get_updates(offset=None):
+    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    params = {}
+    if offset:
+        params["offset"] = offset
+    try:
+        r = requests.get(
+            f"https://api.telegram.org/bot{token}/getUpdates",
+            params=params,
+            timeout=10,
+        )
+        return r.json().get("result", [])
+    except Exception as e:
+        print(f"tg get_updates err: {e}")
+        return []
+
+
+# TRADE PARSING
+def parse_trade_command(message_text, current_tickers):
+    prompt = (
+        "Parse this user message about a stock trade into structured JSON.\n\n"
+        f"User's current portfolio tickers: {', '.join(current_tickers)}\n"
+        f'Message: "{message_text}"\n\n'
+        "Possible actions:\n"
+        '- "buy": user bought shares of a stock (new position or adding to existing)\n'
+        '- "sell": user sold shares (can be percentage or absolute share count)\n'
+        '- "set": user is directly overriding shares + avg_cost (for manual corrections)\n'
+        '- "remove": user is removing/closing a position entirely\n'
+        '- "ignore": message is not about a trade (greetings, questions, random text)\n\n'
+        "Return JSON in this exact format:\n"
+        "{\n"
+        '  "action": "buy|sell|set|remove|ignore",\n'
+        '  "ticker": "MU",\n'
+        '  "shares": 1.5,\n'
+        '  "is_percentage": false,\n'
+        '  "price": 750.50,\n'
+        '  "new_avg_cost": null,\n'
+        '  "new_shares": null,\n'
+        '  "confidence": 0.95,\n'
+        '  "summary": "short human-readable summary of parsed action"\n'
+        "}\n\n"
+        "Rules:\n"
+        '- For sell with percentage like "sold 30%", set shares=30 and is_percentage=true\n'
+        '- For sell with shares like "sold 5 MU", set shares=5 and is_percentage=false\n'
+        '- For "sold all", set is_percentage=true and shares=100\n'
+        '- For buy, shares is the count bought, price is execution price\n'
+        '- For set, fill new_shares and new_avg_cost\n'
+        '- ticker should be uppercase US stock symbol\n'
+        '- confidence < 0.7 means uncertain, low confidence trades will be ignored\n'
+        '- If message is unclear or not a trade, action must be "ignore"\n\n'
+        "JSON only, no other text."
+    )
+
+    raw = call_gemini(prompt, max_tokens=400, json_mode=True)
+    try:
+        return json.loads(raw)
+    except Exception as e:
+        print(f"trade parse err: {e}")
+        return {"action": "ignore", "confidence": 0}
+
+
+def apply_trade(portfolio, trade):
+    action = trade.get("action")
+    confidence = trade.get("confidence", 0)
+    if action == "ignore" or confidence < 0.7:
+        return portfolio, None
+
+    ticker = (trade.get("ticker") or "").upper()
+    if not ticker:
+        return portfolio, None
+
+    p = {k: dict(v) for k, v in portfolio.items()}
+
+    if action == "sell":
+        if ticker not in p:
+            return portfolio, f"⚠ Cannot sell {ticker} - not in portfolio"
+        if trade.get("is_percentage"):
+            pct = (trade.get("shares") or 0) / 100
+            if pct >= 1:
+                old = p.pop(ticker)
+                return p, f"✓ Sold all of {ticker} (was {old['shares']:.4f} sh @ ${old['avg_cost']})"
+            old_sh = p[ticker]["shares"]
+            new_sh = round(old_sh * (1 - pct), 6)
+            p[ticker]["shares"] = new_sh
+            return p, f"✓ Sold {pct*100:.0f}% of {ticker}: {old_sh:.4f} → {new_sh:.4f} sh @ avg ${p[ticker]['avg_cost']}"
+        else:
+            sold = trade.get("shares") or 0
+            old_sh = p[ticker]["shares"]
+            new_sh = round(old_sh - sold, 6)
+            if new_sh <= 0:
+                p.pop(ticker)
+                return p, f"✓ Sold {sold} sh of {ticker} (closed position)"
+            p[ticker]["shares"] = new_sh
+            return p, f"✓ Sold {sold} sh of {ticker}: {old_sh:.4f} → {new_sh:.4f} remaining"
+
+    elif action == "buy":
+        new_sh = trade.get("shares") or 0
+        price = trade.get("price")
+        if not new_sh or not price:
+            return portfolio, "⚠ Buy needs both share count and price"
+        if ticker in p:
+            old_sh = p[ticker]["shares"]
+            old_cost = p[ticker]["avg_cost"]
+            total = old_sh + new_sh
+            new_avg = (old_sh * old_cost + new_sh * price) / total
+            p[ticker] = {"shares": round(total, 6), "avg_cost": round(new_avg, 2)}
+            return p, f"✓ Bought {new_sh} {ticker} @ ${price}. New: {total:.4f} sh @ avg ${new_avg:.2f}"
+        else:
+            p[ticker] = {"shares": round(new_sh, 6), "avg_cost": round(price, 2)}
+            return p, f"✓ New position: {new_sh} {ticker} @ ${price}"
+
+    elif action == "set":
+        ns = trade.get("new_shares")
+        nc = trade.get("new_avg_cost")
+        if ns is None or nc is None:
+            return portfolio, "⚠ Set needs both shares and avg_cost"
+        p[ticker] = {"shares": round(ns, 6), "avg_cost": round(nc, 2)}
+        return p, f"✓ Set {ticker} to {ns} sh @ avg ${nc}"
+
+    elif action == "remove":
+        if ticker in p:
+            p.pop(ticker)
+            return p, f"✓ Removed {ticker}"
+        return portfolio, f"⚠ {ticker} not in portfolio"
+
+    return portfolio, None
+
+
+def git_commit_portfolio():
+    """Commit portfolio.json change back to repo."""
+    try:
+        subprocess.run(["git", "config", "user.name", "scout-agent"], check=True)
+        subprocess.run(["git", "config", "user.email", "scout@bot.local"], check=True)
+        subprocess.run(["git", "add", PORTFOLIO_FILE], check=True)
+        result = subprocess.run(["git", "diff", "--staged", "--quiet"])
+        if result.returncode == 0:
+            return  # no changes
+        subprocess.run(["git", "commit", "-m", "Update portfolio from Telegram"], check=True)
+        subprocess.run(["git", "push"], check=True)
+    except Exception as e:
+        print(f"git commit err: {e}")
+
+
+def process_telegram_messages(cache, portfolio):
+    last_offset = cache.get("last_telegram_offset", 0)
+    new_offset = last_offset + 1 if last_offset else None
+    updates = telegram_get_updates(offset=new_offset)
+    if not updates:
+        return portfolio, False
+
+    p = portfolio
+    confirmations = []
+    changed = False
+
+    for u in updates:
+        cache["last_telegram_offset"] = u["update_id"]
+        msg = u.get("message", {})
+        text = (msg.get("text") or "").strip()
+        if not text or text.startswith("/"):
+            continue
+
+        trade = parse_trade_command(text, list(p.keys()))
+        new_p, conf = apply_trade(p, trade)
+        if conf:
+            p = new_p
+            confirmations.append(conf)
+            if not conf.startswith("⚠"):
+                changed = True
+
+    if changed:
+        save_portfolio(p)
+        git_commit_portfolio()
+
+    if confirmations:
+        telegram_send("📒 *Portfolio updates*\n\n" + "\n".join(confirmations))
+
+    return p, changed
+
+
 # SCOUT MODE
-def scout_news(cache):
-    items = fetch_news()
+def scout_news(cache, portfolio_keys, watchlist):
+    items = fetch_news(portfolio_keys)
     seen = set(cache["seen_news"])
     new = [i for i in items if i["id"] not in seen]
     cache["seen_news"] = list(seen | {i["id"] for i in items})
@@ -282,8 +521,8 @@ def scout_news(cache):
     items_str = "\n".join(f"- {i['title']}" for i in new[:60])
     prompt = (
         "Analyze headlines for stock impact.\n"
-        f"Portfolio: {', '.join(PORTFOLIO)}\n"
-        f"Watchlist: {', '.join(WATCHLIST[:60])}\n\n"
+        f"Portfolio: {', '.join(portfolio_keys)}\n"
+        f"Watchlist: {', '.join(watchlist[:60])}\n\n"
         f"News (last 4h):\n{items_str}\n\n"
         "Return JSON.\n\n"
         "'urgent': items causing >5%% move TODAY in any portfolio ticker. Format:\n"
@@ -359,15 +598,14 @@ def format_recommendation(a, action):
 
 
 # DEEP RESEARCH
-def deep_research(cache):
+def deep_research(cache, portfolio):
     sections = []
-    for ticker in PORTFOLIO:
+    for ticker, d in portfolio.items():
         fund = get_fundamentals(ticker, cache)
         if not fund or not fund.get("price"):
             continue
         val = valuation_score(fund)
         tech = technical_signals(ticker)
-        d = PORTFOLIO_DETAIL[ticker]
         pl_pct = (fund["price"] - d["avg_cost"]) / d["avg_cost"] * 100
         news = fetch_ticker_news(ticker, limit=8)
 
@@ -388,53 +626,46 @@ def deep_research(cache):
 
     prompt = (
         "You are a portfolio analyst writing a pre-market deep research brief for a Bangkok-based "
-        "investor, 2 hours before US market open. Their full 14-stock portfolio data is below: current "
+        "investor, 2 hours before US market open. Their full portfolio data is below: current "
         "prices, cost basis, fundamentals, technicals, and last week's news per ticker.\n\n"
         f"{full_context}\n\n"
-        "Write a comprehensive Markdown brief in this exact structure:\n\n"
+        "Write a comprehensive Markdown brief. STRICT REQUIREMENT: Total length must be under 1500 "
+        "words and must include all 5 sections completely - do NOT cut off mid-section.\n\n"
         "## Executive Summary\n"
-        "3-4 sentences: overall portfolio health, biggest risk for today's session, biggest opportunity.\n\n"
+        "3-4 sentences: overall portfolio health, biggest risk for today, biggest opportunity.\n\n"
         "## Action Priorities (max 5, ranked)\n"
-        "Specific, actionable items with concrete price levels. Example:\n"
-        "1. Trim MU 20% above $760 - 2nd profit-take tranche; valuation stretched.\n"
-        "2. Add to ORCL on dip to $185 - fair value $245, thesis intact, RSI 42 bottoming.\n"
-        "Cite the actual numbers from the data above. No vague language.\n\n"
-        "## Per-Stock Status (all 14)\n"
-        "Format: TICKER green/yellow/red - current state in 1 line + key catalyst this week + action.\n\n"
+        "Specific, actionable items with concrete price levels. Cite actual numbers from data above.\n"
+        "Example format: '1. Trim MU 20% above $760 - 2nd tranche, P/E stretched at 32.'\n\n"
+        "## Per-Stock Status (all positions)\n"
+        "Format: TICKER green/yellow/red - 1 line state + key catalyst this week + action.\n"
+        "Keep each stock to ONE LINE only.\n\n"
         "## Top 3 Risks Today\n"
         "Portfolio-wide risks: macro, sector, or specific names. 1 line each.\n\n"
         "## Watch at Open\n"
         "2-3 specific tickers and what to look for in the first 30 min of trading.\n\n"
-        "Tone: direct, specific, no filler, no disclaimers."
+        "Tone: direct, specific, no filler, no disclaimers. Finish all 5 sections."
     )
 
-    return call_gemini(prompt, max_tokens=4000, model=MODEL_DEEP)
-
-
-# TELEGRAM
-def telegram_send(text):
-    token = os.environ["TELEGRAM_BOT_TOKEN"]
-    chat = os.environ["TELEGRAM_CHAT_ID"]
-    for chunk in [text[i:i+4000] for i in range(0, len(text), 4000)]:
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                data={"chat_id": chat, "text": chunk, "parse_mode": "Markdown"},
-                timeout=10,
-            )
-        except Exception as e:
-            print(f"tg err: {e}")
+    return call_gemini(prompt, max_tokens=8000, model=MODEL_DEEP)
 
 
 # MAIN
 def run_scout():
     cache = load_cache()
-    result = scout_news(cache)
+    portfolio = load_portfolio()
+
+    # Process any new Telegram trade commands first
+    portfolio, _ = process_telegram_messages(cache, portfolio)
+
+    portfolio_keys = list(portfolio.keys())
+    watchlist = sorted(set(sum(WATCHLIST_BY_SECTOR.values(), [])) | set(portfolio_keys))
+
+    result = scout_news(cache, portfolio_keys, watchlist)
     msgs = []
     if result.get("urgent"):
-        msg = "URGENT\n\n"
+        msg = "*URGENT*\n\n"
         for u in result["urgent"]:
-            sev = "[CRITICAL]" if u.get("severity") == "critical" else "[HIGH]"
+            sev = "[CRIT]" if u.get("severity") == "critical" else "[HIGH]"
             msg += f"{sev} *{u['ticker']}* - {u['headline']}\n_{u['why']}_\n\n"
         msgs.append(msg)
     if result.get("candidates"):
@@ -445,16 +676,24 @@ def run_scout():
             if action:
                 recs.append(format_recommendation(a, action))
         if recs:
-            msgs.append("Candidates\n\n" + "\n\n---\n\n".join(recs))
+            msgs.append("*Candidates*\n\n" + "\n\n---\n\n".join(recs))
+
     save_cache(cache)
+    save_portfolio(portfolio)  # ensure portfolio.json exists
     for m in msgs:
         telegram_send(m)
 
 
 def run_deep():
     cache = load_cache()
-    brief = deep_research(cache)
+    portfolio = load_portfolio()
+
+    # Process any new Telegram trade commands first
+    portfolio, _ = process_telegram_messages(cache, portfolio)
+
+    brief = deep_research(cache, portfolio)
     save_cache(cache)
+    save_portfolio(portfolio)
     header = f"*Deep Research - {datetime.utcnow().strftime('%b %d %Y')}*\n_2 hours to US open_\n\n"
     telegram_send(header + brief)
 
