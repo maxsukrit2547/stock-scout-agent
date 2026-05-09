@@ -1,0 +1,56 @@
+name: Stock Scout Agent
+
+on:
+  schedule:
+    - cron: '0 */4 * * 1-5'    # scout: every 4 hours, weekdays
+    - cron: '30 11 * * 1-5'    # deep: 11:30 UTC = 18:30 Bangkok
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode'
+        required: true
+        default: 'scout'
+        type: choice
+        options: [scout, deep]
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: scout_cache.json
+          key: scout-cache-${{ github.run_id }}
+          restore-keys: scout-cache-
+
+      - run: pip install google-genai feedparser requests yfinance pandas numpy
+
+      - name: Pick mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ inputs.mode }}" >> $GITHUB_OUTPUT
+          elif [ "$(date -u +%H%M)" = "1130" ]; then
+            echo "mode=deep" >> $GITHUB_OUTPUT
+          else
+            echo "mode=scout" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run agent
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scout_agent.py ${{ steps.mode.outputs.mode }}
+
+      - name: Save cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: scout_cache.json
+          key: scout-cache-${{ github.run_id }}
