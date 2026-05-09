@@ -48,7 +48,7 @@ client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 NORMAL_MULTIPLES = {"pe": 22, "ps": 6, "pb": 4}
 
-===== CACHE =====
+#===== CACHE =====
 def load_cache():
 try:
 with open(CACHE_FILE) as f:
@@ -61,7 +61,7 @@ c["seen_news"] = c["seen_news"][-2000:]
 with open(CACHE_FILE, "w") as f:
 json.dump(c, f, default=str)
 
-===== NEWS =====
+#===== NEWS =====
 def fetch_news():
 items = []
 for url in RSS_FEEDS:
@@ -79,7 +79,7 @@ return items
 
 def fetch_ticker_news(ticker, limit=10): items = [] try: feed = feedparser.parse(f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US") for e in feed.entries[:limit]: items.append(f"- {e.title}") except Exception as ex: print(f"ticker news err {ticker}: {ex}") return "\n".join(items) if items else "(no recent news)"
 
-===== FUNDAMENTALS =====
+#===== FUNDAMENTALS =====
 def get_fundamentals(ticker, cache):
 key = ticker.upper()
 cached = cache["fundamentals"].get(key)
@@ -153,7 +153,7 @@ return {
     "pb": round(pb, 2) if pb else None,
     "flags": flags,
 }
-===== TECHNICALS =====
+#===== TECHNICALS =====
 def technical_signals(ticker):
 try:
 hist = yf.Ticker(ticker).history(period="3mo", interval="1d")
@@ -206,7 +206,7 @@ close = hist["Close"]
 except Exception as e:
     print(f"ta err {ticker}: {e}")
     return None
-===== GEMINI =====
+#===== GEMINI =====
 def call_gemini(prompt, max_tokens=600, json_mode=False, model=None):
 config = types.GenerateContentConfig(
 max_output_tokens=max_tokens,
@@ -220,7 +220,7 @@ config=config,
 )
 return response.text
 
-===== SCOUT MODE =====
+#===== SCOUT MODE =====
 def scout_news(cache):
 items = fetch_news()
 seen = set(cache["seen_news"])
@@ -281,7 +281,7 @@ return None
 
 def format_recommendation(a, action): val, tech = a.get("valuation"), a.get("technical") or {} msg = f"{a['ticker']} — {action}\n" if a["thesis"]: msg += f"{a['thesis']}\n" msg += f"\nValuation\nPrice ${val['current_price']} | P/E {val['pe']} | P/S {val['ps']} | P/BV {val['pb']}\n" if val.get("fair_value"): msg += f"Fair value: ${val['fair_value']} ({val['upside_pct']:+.1f}%)\n" if val.get("ddm_value"): msg += f"DDM: ${val['ddm_value']}\n" if tech: msg += f"\nTechnical\nRSI {tech['rsi']} | MACD hist {tech['macd_hist']:+.3f} | {'>' if tech['above_ma50'] else '<'} MA50\n" msg += f"Support ${tech['support']} | Resistance ${tech['resistance']} | {tech['signal']}\n" if a["trigger"]: msg += f"\n_Trigger: {a['trigger']}\n" msg += "\n⚠ Verify before acting._" return msg
 
-===== DEEP RESEARCH =====
+#===== DEEP RESEARCH =====
 def deep_research(cache):
 sections = []
 for ticker in PORTFOLIO:
@@ -347,10 +347,10 @@ Watch at Open
 Tone: direct, specific, no filler, no disclaimers."""
 
 return call_gemini(prompt, max_tokens=4000, model=MODEL_DEEP)
-===== TELEGRAM =====
+#===== TELEGRAM =====
 def telegram_send(text): token = os.environ["TELEGRAM_BOT_TOKEN"] chat = os.environ["TELEGRAM_CHAT_ID"] for chunk in [text[i:i+4000] for i in range(0, len(text), 4000)]: try: requests.post( f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat, "text": chunk, "parse_mode": "Markdown"}, timeout=10, ) except Exception as e: print(f"tg err: {e}")
 
-===== MAIN =====
+#===== MAIN =====
 def run_scout(): cache = load_cache() result = scout_news(cache) msgs = [] if result.get("urgent"): msg = "🚨 URGENT\n\n" for u in result["urgent"]: sev = "🔴" if u.get("severity") == "critical" else "🟠" msg += f"{sev} {u['ticker']} — {u['headline']}\n_{u['why']}_\n\n" msgs.append(msg) if result.get("candidates"): analyzed = [analyze_candidate(c, cache) for c in result["candidates"][:5]] recs = [format_recommendation(a, action) for a in analyzed if (action := decide_action(a))] if recs: msgs.append("🔍 Candidates\n\n" + "\n———\n\n".join(recs)) save_cache(cache) for m in msgs: telegram_send(m)
 
 def run_deep(): cache = load_cache() brief = deep_research(cache) save_cache(cache) header = f"📊 Deep Research — {datetime.utcnow().strftime('%b %d %Y')}\n_2 hours to US open_\n\n" telegram_send(header + brief)
