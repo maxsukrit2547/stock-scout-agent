@@ -8,7 +8,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-===== EDIT THIS — your real positions =====
+#===== EDIT THIS — your real positions =====
 PORTFOLIO_DETAIL = {
 "AMZN":  {"shares": 3.13269,  "avg_cost": 223.28},
 "ASTS":  {"shares": 7.83626,  "avg_cost": 63.85},
