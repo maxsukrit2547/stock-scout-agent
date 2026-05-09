@@ -818,8 +818,8 @@ def fmt_candidate_html(a, action):
         f"Price {code('$' + str(val['current_price']))}  P/E {code(val['pe'])}  P/S {code(val['ps'])}  P/BV {code(val['pb'])}"
     )
     if val.get("fair_value"):
-        parts.append(f"Fair value {code('$' + str(val['fair_value']))} ({code(f'{val.get('upside_pct'):+.1f}%')})")
-    if tech:
+        parts.append(f"Fair value {code('$' + str(val['fair_value']))} ({code(f'{val.get("upside_pct"):+.1f}%')})")
+    if tech: 
         ma = ">" if tech["above_ma50"] else "<"
         parts.append(
             f"\n{bold('Technical')}\n"
