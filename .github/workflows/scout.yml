@@ -2,8 +2,8 @@ name: Stock Scout Agent
 
 on:
   schedule:
-    - cron: '0 */4 * * 1-5'    # scout: every 4 hours, weekdays
-    - cron: '30 11 * * 1-5'    # deep: 11:30 UTC = 18:30 Bangkok
+    - cron: '0 */4 * * 1-5'
+    - cron: '30 11 * * 1-5'
   workflow_dispatch:
     inputs:
       mode:
@@ -13,11 +13,17 @@ on:
         type: choice
         options: [scout, deep]
 
+permissions:
+  contents: write
+
 jobs:
   agent:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: actions/setup-python@v5
         with: { python-version: '3.11' }
 
