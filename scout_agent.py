@@ -1079,4 +1079,218 @@ def build_per_stock(d):
 
 
 def build_sector_trends(trends):
-    parts = [f"🌐 {bold('SECTOR &amp; MEGATRENDS')}
+    parts = [f"🌐 {bold('SECTOR &amp; MEGATRENDS')}"]
+    if not trends:
+        parts.append("\n<i>No notable sector moves.</i>")
+        return "\n".join(parts)
+    for t in trends:
+        line = f"\n• {bold(t.get('sector', '—'))}"
+        if t.get("outlook"):
+            line += f" — <i>{esc(t['outlook'])}</i>"
+        line += f"\n   {esc(t.get('trend', ''))}"
+        if t.get("your_exposure"):
+            tickers = " ".join(code("$" + x) for x in t["your_exposure"])
+            line += f"\n   Your exposure: {tickers}"
+        parts.append(line)
+    return "\n".join(parts)
+
+
+def build_watchlist_opps(opps):
+    parts = [f"🔭 {bold('OPPORTUNITIES OUTSIDE PORTFOLIO')}"]
+    if not opps:
+        parts.append("\n<i>No clear setups outside your portfolio today.</i>")
+        return "\n".join(parts)
+    for o in opps[:3]:
+        line = f"\n• {code('$' + o['ticker'])} — {esc(o.get('thesis', ''))}"
+        if o.get("why_now"):
+            line += f"\n   <i>Why now: {esc(o['why_now'])}</i>"
+        if o.get("fair_value_estimate"):
+            line += f"\n   Fair value est: {code('$' + str(o['fair_value_estimate']))}"
+        parts.append(line)
+    return "\n".join(parts)
+
+
+def build_brief_sections(brief_data):
+    return [
+        build_header(),
+        build_exec_summary(brief_data.get("executive_summary") or {}),
+        build_earnings_this_week(brief_data.get("earnings_this_week") or []),
+        build_action_priorities(brief_data.get("action_priorities") or {}),
+        build_watch_at_open(brief_data.get("watch_at_open") or []),
+        build_macro_risks(brief_data.get("macro_risks") or []),
+        build_per_stock(brief_data.get("per_stock_status") or {}),
+        build_sector_trends(brief_data.get("sector_trends") or []),
+        build_watchlist_opps(brief_data.get("watchlist_opportunities") or []),
+    ]
+
+
+# ===================================================================
+# SCOUT MODE
+# ===================================================================
+
+def scout_news(cache, portfolio_keys, watchlist):
+    items = fetch_news(portfolio_keys)
+    seen = set(cache["seen_news"])
+    new = [i for i in items if i["id"] not in seen]
+    cache["seen_news"] = list(seen | {i["id"] for i in items})
+    if not new:
+        return {"urgent": [], "candidates": []}
+    items_str = "\n".join(f"- {i['title']}" for i in new[:60])
+    prompt = (
+        "Analyze headlines for stock impact.\n"
+        f"Portfolio: {', '.join(portfolio_keys)}\n"
+        f"Watchlist: {', '.join(watchlist[:60])}\n\n"
+        f"News:\n{items_str}\n\n"
+        'Return JSON: {"urgent":[{"ticker":"MU","headline":"...","why":"...","severity":"critical|high"}],'
+        '"candidates":[{"ticker":"AMD","thesis":"<1 line>","trigger":"<news>"}]}\n\n'
+        "Urgent = >5% move TODAY. Max 5 candidates. JSON only."
+    )
+    raw = call_gemini(prompt, max_tokens=900, json_mode=True)
+    try:
+        return json.loads(raw)
+    except Exception as e:
+        print(f"news parse err: {e}")
+        return {"urgent": [], "candidates": []}
+
+
+def analyze_candidate(c, cache, portfolio_value):
+    ticker = c["ticker"].upper()
+    fund = get_fundamentals(ticker, cache)
+    val = pick_valuation(fund) if fund else None
+    tech = technical_signals(ticker)
+    sizing = None
+    if val and val.get("current_price"):
+        sizing = suggest_position_size(ticker, val["current_price"], portfolio_value)
+    return {
+        "ticker": ticker,
+        "thesis": c.get("thesis", ""),
+        "trigger": c.get("trigger", ""),
+        "valuation": val,
+        "tech": tech,
+        "sizing": sizing,
+    }
+
+
+def fmt_candidate_html(a):
+    val, tech, sizing = a.get("valuation"), a.get("tech"), a.get("sizing")
+    verdict = tech_verdict(tech)
+
+    if val and val["verdict"] == "undervalued" and verdict.startswith("oversold"):
+        action = "✅ STRONG BUY SETUP"
+        show_size = True
+    elif val and val["verdict"] == "undervalued":
+        action = "🟢 UNDERVALUED — wait for technicals"
+        show_size = False
+    elif verdict.startswith("oversold") and val and val["verdict"] == "fair":
+        action = "🟡 TECHNICAL SETUP"
+        show_size = False
+    elif val and val["verdict"] == "overvalued" and "overbought" in verdict:
+        action = "🔴 RICH + EXTENDED"
+        show_size = False
+    else:
+        return None
+
+    parts = [f"{code('$' + a['ticker'])} — {bold(action)}"]
+    if a.get("thesis"):
+        parts.append(f"<i>{esc(a['thesis'])}</i>")
+    if val:
+        upside_str = "{:+.1f}%".format(val["upside_pct"])
+        fv_str = "$" + str(val["fair_value"])
+        parts.append(
+            f"\n{bold('Fair value:')} {code(fv_str)} ({code(upside_str)}, {esc(val['method'])})"
+        )
+    parts.append(f"{bold('Technical:')} <i>{esc(verdict)}</i>")
+    if tech:
+        sup_str = "$" + str(tech["support"])
+        res_str = "$" + str(tech["resistance"])
+        parts.append(f"Range: {code(sup_str)}–{code(res_str)}")
+    if show_size and sizing:
+        total_str = "$" + str(int(sizing["total_dollars"]))
+        pct_str = "{}%".format(sizing["as_pct_portfolio"])
+        vol_str = "{}% vol".format(sizing["vol_annualized_pct"])
+        t1_str = "$" + str(int(sizing["tranche_1"]))
+        t2_str = "$" + str(int(sizing["tranche_2"]))
+        t3_str = "$" + str(int(sizing["tranche_3"]))
+        parts.append(
+            f"\n{bold('Suggested size:')} {code(total_str)} "
+            f"({code(pct_str)} of portfolio, {esc(vol_str)})"
+        )
+        parts.append(f"Tranches: {code(t1_str)} / {code(t2_str)} / {code(t3_str)}")
+    if a.get("trigger"):
+        parts.append(f"\n<i>Trigger: {esc(a['trigger'])}</i>")
+    parts.append("<i>⚠️ Verify before acting.</i>")
+    return "\n".join(parts)
+
+
+# ===================================================================
+# MAIN MODES
+# ===================================================================
+
+def run_scout():
+    cache = load_cache()
+    portfolio = load_portfolio()
+    portfolio = process_telegram_messages(cache, portfolio)
+    portfolio_value = compute_portfolio_value(portfolio, cache)
+    dd_alert = check_drawdown_alert(portfolio_value, cache)
+    if dd_alert:
+        send_drawdown_alert(dd_alert)
+    keys = list(portfolio.keys())
+    watchlist = sorted(set(sum(WATCHLIST_BY_SECTOR.values(), [])) | set(keys))
+    result = scout_news(cache, keys, watchlist)
+    sections = []
+    if result.get("urgent"):
+        parts = [f"🚨 {bold('URGENT')}"]
+        for u in result["urgent"]:
+            sev = "🔴" if u.get("severity") == "critical" else "🟠"
+            parts.append(
+                f"\n{sev} {code('$' + u['ticker'])} — {esc(u['headline'])}"
+                f"\n<i>{esc(u['why'])}</i>"
+            )
+        sections.append("\n".join(parts))
+    if result.get("candidates"):
+        analyzed = [analyze_candidate(c, cache, portfolio_value) for c in result["candidates"][:5]]
+        recs = [r for r in (fmt_candidate_html(a) for a in analyzed) if r]
+        if recs:
+            sections.append(f"🔍 {bold('CANDIDATES')}\n\n" + "\n\n———\n\n".join(recs))
+    save_cache(cache)
+    save_portfolio(portfolio)
+    if sections:
+        send_chunked(sections)
+
+
+def run_deep():
+    cache = load_cache()
+    portfolio = load_portfolio()
+    portfolio = process_telegram_messages(cache, portfolio)
+    portfolio_value = compute_portfolio_value(portfolio, cache)
+    dd_alert = check_drawdown_alert(portfolio_value, cache)
+    if dd_alert:
+        send_drawdown_alert(dd_alert)
+    brief_data = deep_research_data(cache, portfolio)
+    save_cache(cache)
+    save_portfolio(portfolio)
+    sections = build_brief_sections(brief_data)
+    send_chunked(sections)
+
+
+def run_listen():
+    cache = load_cache()
+    portfolio = load_portfolio()
+    portfolio = process_telegram_messages(cache, portfolio)
+    portfolio_value = compute_portfolio_value(portfolio, cache)
+    dd_alert = check_drawdown_alert(portfolio_value, cache)
+    if dd_alert:
+        send_drawdown_alert(dd_alert)
+    save_cache(cache)
+    save_portfolio(portfolio)
+
+
+if __name__ == "__main__":
+    mode = sys.argv[1] if len(sys.argv) > 1 else "scout"
+    if mode == "deep":
+        run_deep()
+    elif mode == "listen":
+        run_listen()
+    else:
+        run_scout()
+
