@@ -1082,7 +1082,23 @@ def build_watchlist_opps(opps):
         parts.append("\n<i>No clear setups outside your portfolio today.</i>")
         return "\n".join(parts)
     for o in opps[:3]:
-        line = f"\n• {code('
+        line = f"\n• {code('$' + o['ticker'])} — {esc(o.get('thesis', ''))}"
+        if o.get("why_now"):
+            line += f"\n   <i>Why now: {esc(o['why_now'])}</i>"
+        cur = o.get("current_price")
+        fv = o.get("fair_value_estimate")
+        if cur and fv:
+            line += f"\n   Current: {code('$' + str(cur))}  ·  Fair value: {code('$' + str(fv))}"
+            up = o.get("upside_pct")
+            if up is not None:
+                up_str = "{:+.1f}%".format(up)
+                line += f"  ({code(up_str)})"
+        elif cur:
+            line += f"\n   Current: {code('$' + str(cur))}"
+        elif fv:
+            line += f"\n   Fair value est: {code('$' + str(fv))}"
+        parts.append(line)
+    return "\n".join(parts)
 
 
 def build_brief_sections(brief_data):
