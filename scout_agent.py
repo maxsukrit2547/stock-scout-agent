@@ -298,8 +298,11 @@ def pick_valuation(fund):
     else:
         verdict = "fair"
     return {
-        "fair_value": fair, "method": method, "upside_pct": upside,
-        "verdict": verdict, "current_price": round(price, 2),
+        "fair_value": fair,
+        "method": method,
+        "upside_pct": upside,
+        "verdict": verdict,
+        "current_price": round(price, 2),
     }
 
 
@@ -339,14 +342,22 @@ def tech_verdict(tech):
         return "no technical data"
     rsi = tech["rsi"]
     above, bull, bear = tech["above_ma50"], tech["macd_bull"], tech["macd_bear"]
-    if rsi >= 75 and bear: return "extremely overbought, reversal forming"
-    if rsi >= 70: return "overbought territory"
-    if rsi <= 25 and bull: return "extremely oversold, reversal setup"
-    if rsi <= 30 and bull and above: return "oversold dip-buy setup"
-    if rsi <= 30: return "oversold, awaiting reversal"
-    if above and bull: return "healthy uptrend with momentum"
-    if above and not bull: return "uptrend, momentum cooling"
-    if not above and bull: return "recovering from weakness"
+    if rsi >= 75 and bear:
+        return "extremely overbought, reversal forming"
+    if rsi >= 70:
+        return "overbought territory"
+    if rsi <= 25 and bull:
+        return "extremely oversold, reversal setup"
+    if rsi <= 30 and bull and above:
+        return "oversold dip-buy setup"
+    if rsi <= 30:
+        return "oversold, awaiting reversal"
+    if above and bull:
+        return "healthy uptrend with momentum"
+    if above and not bull:
+        return "uptrend, momentum cooling"
+    if not above and bull:
+        return "recovering from weakness"
     return "weak trend"
 
 
@@ -412,12 +423,18 @@ def check_drawdown_alert(portfolio_value, cache):
         return None
     if dd_pct <= DRAWDOWN_ALARM_PCT and last_alert != "alarm":
         cache["last_drawdown_alert_level"] = "alarm"
-        return {"level": "alarm", "dd_pct": dd_pct, "current": portfolio_value, "peak": peak,
-                "peak_date": cache.get("peak_date", "—")}
+        return {
+            "level": "alarm", "dd_pct": dd_pct,
+            "current": portfolio_value, "peak": peak,
+            "peak_date": cache.get("peak_date", "—"),
+        }
     if dd_pct <= DRAWDOWN_WARN_PCT and last_alert is None:
         cache["last_drawdown_alert_level"] = "warning"
-        return {"level": "warning", "dd_pct": dd_pct, "current": portfolio_value, "peak": peak,
-                "peak_date": cache.get("peak_date", "—")}
+        return {
+            "level": "warning", "dd_pct": dd_pct,
+            "current": portfolio_value, "peak": peak,
+            "peak_date": cache.get("peak_date", "—"),
+        }
     return None
 
 
@@ -426,9 +443,9 @@ def send_drawdown_alert(alert):
         emoji, label = "🚨", "DRAWDOWN ALARM"
     else:
         emoji, label = "⚠️", "DRAWDOWN WARNING"
-    current_str = "$" + str(round(alert['current']))
-    peak_str = "$" + str(round(alert['peak']))
-    dd_str = "{:.1f}%".format(alert['dd_pct'])
+    current_str = "$" + str(round(alert["current"]))
+    peak_str = "$" + str(round(alert["peak"]))
+    dd_str = "{:.1f}%".format(alert["dd_pct"])
     msg = (
         f"{emoji} {bold(label)}\n\n"
         f"Portfolio: {code(current_str)} ({code(dd_str)} from peak)\n"
@@ -450,7 +467,9 @@ def call_gemini(prompt, max_tokens=600, json_mode=False, model=None):
         response_mime_type="application/json" if json_mode else None,
     )
     response = client.models.generate_content(
-        model=model or MODEL_LIGHT, contents=prompt, config=config,
+        model=model or MODEL_LIGHT,
+        contents=prompt,
+        config=config,
     )
     return response.text
 
@@ -466,7 +485,7 @@ def call_gemini_image(image_bytes, prompt, mime_type="image/jpeg", max_tokens=15
 
 
 # ===================================================================
-# TELEGRAM: send + chunk
+# TELEGRAM: helpers + send + chunk
 # ===================================================================
 
 def esc(s):
@@ -474,8 +493,10 @@ def esc(s):
         return ""
     return html.escape(str(s), quote=False)
 
+
 def code(s):
     return f"<code>{esc(s)}</code>"
+
 
 def bold(s):
     return f"<b>{esc(s)}</b>"
@@ -528,11 +549,17 @@ def telegram_send(text, html_mode=True):
     if html_mode:
         payload["parse_mode"] = "HTML"
     try:
-        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data=payload, timeout=15)
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=payload, timeout=15,
+        )
         if r.status_code != 200 and html_mode:
             print(f"tg HTML failed {r.status_code}: {r.text[:200]}")
             payload.pop("parse_mode", None)
-            requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data=payload, timeout=15)
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data=payload, timeout=15,
+            )
     except Exception as e:
         print(f"tg send err: {e}")
 
@@ -550,7 +577,10 @@ def telegram_get_updates(offset=None):
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     params = {"offset": offset} if offset else {}
     try:
-        r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", params=params, timeout=10)
+        r = requests.get(
+            f"https://api.telegram.org/bot{token}/getUpdates",
+            params=params, timeout=10,
+        )
         return r.json().get("result", [])
     except Exception as e:
         print(f"tg get_updates err: {e}")
@@ -560,12 +590,17 @@ def telegram_get_updates(offset=None):
 def download_telegram_file(file_id):
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     try:
-        r = requests.get(f"https://api.telegram.org/bot{token}/getFile",
-                         params={"file_id": file_id}, timeout=10)
+        r = requests.get(
+            f"https://api.telegram.org/bot{token}/getFile",
+            params={"file_id": file_id}, timeout=10,
+        )
         file_path = (r.json().get("result") or {}).get("file_path")
         if not file_path:
             return None
-        r = requests.get(f"https://api.telegram.org/file/bot{token}/{file_path}", timeout=20)
+        r = requests.get(
+            f"https://api.telegram.org/file/bot{token}/{file_path}",
+            timeout=20,
+        )
         return r.content if r.status_code == 200 else None
     except Exception as e:
         print(f"tg download err: {e}")
@@ -578,8 +613,10 @@ def download_telegram_file(file_id):
 
 def fetch_url_text(url):
     headers = {
-        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"),
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        ),
     }
     try:
         r = requests.get(url, headers=headers, timeout=15)
@@ -602,7 +639,9 @@ def is_unsupported_url(url):
 
 
 def portfolio_summary_str(portfolio):
-    return ", ".join(f"{t}({d['shares']:.2f}@${d['avg_cost']})" for t, d in portfolio.items())
+    return ", ".join(
+        f"{t}({d['shares']:.2f}@${d['avg_cost']})" for t, d in portfolio.items()
+    )
 
 
 def analyze_image(image_bytes, caption, portfolio):
@@ -610,7 +649,8 @@ def analyze_image(image_bytes, caption, portfolio):
     prompt = (
         f"User's portfolio: {portfolio_summary_str(portfolio)}\n\n"
         f"User sent an image with: \"{user_q}\"\n\n"
-        "The image could be a chart, news headline, social media post, or research screenshot. Analyze and respond:\n"
+        "The image could be a chart, news headline, social media post, or research screenshot. "
+        "Analyze and respond:\n"
         "1. What the image shows (1 sentence)\n"
         "2. Direct impact on portfolio holdings (which tickers, how)\n"
         "3. Sector/macro implications\n"
@@ -626,8 +666,10 @@ def analyze_image(image_bytes, caption, portfolio):
 
 def analyze_url(url, portfolio):
     if is_unsupported_url(url):
-        return ("That platform (TikTok/Facebook/Instagram) blocks direct fetching. "
-                "Send me a <b>screenshot</b> of the post instead.")
+        return (
+            "That platform (TikTok/Facebook/Instagram) blocks direct fetching. "
+            "Send me a <b>screenshot</b> of the post instead."
+        )
     content = fetch_url_text(url)
     if not content or len(content) < 200:
         return "Couldn't access that URL or content was too thin. Try a screenshot or paste the text."
@@ -661,11 +703,13 @@ def parse_trade_command(message_text, current_tickers):
         f"Current portfolio: {', '.join(current_tickers)}\n"
         f'Message: "{message_text}"\n\n'
         "Actions: buy, sell, set, remove, ignore.\n"
-        "Return JSON: {\"action\":\"...\",\"ticker\":\"MU\",\"shares\":1.5,"
-        "\"is_percentage\":false,\"price\":750.5,\"new_avg_cost\":null,"
-        "\"new_shares\":null,\"confidence\":0.95,\"summary\":\"...\"}\n\n"
-        "Rules: 'sold 30%'→shares=30,is_percentage=true. 'bought N at P'→shares=N,price=P. "
-        "'sold all X'→shares=100,is_percentage=true. If unclear, action=ignore. Confidence<0.7 skipped."
+        'Return JSON: {"action":"...","ticker":"MU","shares":1.5,'
+        '"is_percentage":false,"price":750.5,"new_avg_cost":null,'
+        '"new_shares":null,"confidence":0.95,"summary":"..."}\n\n'
+        "Rules: 'sold 30%' -> shares=30, is_percentage=true. "
+        "'bought N at P' -> shares=N, price=P. "
+        "'sold all X' -> shares=100, is_percentage=true. "
+        "If unclear, action=ignore. Confidence<0.7 skipped."
     )
     raw = call_gemini(prompt, max_tokens=400, json_mode=True)
     try:
@@ -686,52 +730,52 @@ def apply_trade(portfolio, trade):
 
     if a == "sell":
         if ticker not in p:
-            return portfolio, f"⚠️ Cannot sell {ticker} — not in portfolio"
+            return portfolio, f"Cannot sell {ticker} — not in portfolio"
         if trade.get("is_percentage"):
             pct = (trade.get("shares") or 0) / 100
             if pct >= 1:
                 old = p.pop(ticker)
-                return p, f"✅ Sold all of {ticker} (was {old['shares']:.4f} sh @ ${old['avg_cost']})"
+                return p, f"Sold all of {ticker} (was {old['shares']:.4f} sh @ ${old['avg_cost']})"
             old_sh = p[ticker]["shares"]
             new_sh = round(old_sh * (1 - pct), 6)
             p[ticker]["shares"] = new_sh
-            return p, f"✅ Sold {pct*100:.0f}% of {ticker}: {old_sh:.4f} → {new_sh:.4f} sh"
+            return p, f"Sold {pct*100:.0f}% of {ticker}: {old_sh:.4f} to {new_sh:.4f} sh"
         sold = trade.get("shares") or 0
         old_sh = p[ticker]["shares"]
         new_sh = round(old_sh - sold, 6)
         if new_sh <= 0:
             p.pop(ticker)
-            return p, f"✅ Sold {sold} sh {ticker} (closed)"
+            return p, f"Sold {sold} sh {ticker} (closed)"
         p[ticker]["shares"] = new_sh
-        return p, f"✅ Sold {sold} {ticker}: {old_sh:.4f} → {new_sh:.4f}"
+        return p, f"Sold {sold} {ticker}: {old_sh:.4f} to {new_sh:.4f}"
 
     if a == "buy":
         new_sh = trade.get("shares") or 0
         price = trade.get("price")
         if not new_sh or not price:
-            return portfolio, "⚠️ Buy needs share count and price"
+            return portfolio, "Buy needs share count and price"
         if ticker in p:
             old_sh = p[ticker]["shares"]
             old_cost = p[ticker]["avg_cost"]
             total = old_sh + new_sh
             new_avg = (old_sh * old_cost + new_sh * price) / total
             p[ticker] = {"shares": round(total, 6), "avg_cost": round(new_avg, 2)}
-            return p, f"✅ Bought {new_sh} {ticker} @ ${price}. Now {total:.4f} sh @ avg ${new_avg:.2f}"
+            return p, f"Bought {new_sh} {ticker} @ ${price}. Now {total:.4f} sh @ avg ${new_avg:.2f}"
         p[ticker] = {"shares": round(new_sh, 6), "avg_cost": round(price, 2)}
-        return p, f"✅ New position: {new_sh} {ticker} @ ${price}"
+        return p, f"New position: {new_sh} {ticker} @ ${price}"
 
     if a == "set":
         ns, nc = trade.get("new_shares"), trade.get("new_avg_cost")
         if ns is None or nc is None:
-            return portfolio, "⚠️ Set needs both shares and avg_cost"
+            return portfolio, "Set needs both shares and avg_cost"
         p[ticker] = {"shares": round(ns, 6), "avg_cost": round(nc, 2)}
-        return p, f"✅ Set {ticker} to {ns} sh @ avg ${nc}"
+        return p, f"Set {ticker} to {ns} sh @ avg ${nc}"
 
     if a == "remove":
         if ticker in p:
             p.pop(ticker)
-            return p, f"✅ Removed {ticker}"
-        return portfolio, f"⚠️ {ticker} not in portfolio"
+            return p, f"Removed {ticker}"
+        return portfolio, f"{ticker} not in portfolio"
 
     return portfolio, None
 
@@ -776,7 +820,10 @@ def process_telegram_messages(cache, portfolio):
             img = download_telegram_file(largest["file_id"])
             if img:
                 resp = analyze_image(img, caption, p)
-                telegram_send(f"🖼 <b>Image Analysis</b>\n\n{resp}" if resp else "⚠️ Couldn't analyze that image.")
+                telegram_send(
+                    f"🖼 <b>Image Analysis</b>\n\n{resp}"
+                    if resp else "Could not analyze that image."
+                )
             continue
 
         if not text:
@@ -794,7 +841,7 @@ def process_telegram_messages(cache, portfolio):
         if trade.get("confidence", 0) >= 0.7 and trade.get("action") not in (None, "ignore"):
             new_p, conf = apply_trade(p, trade)
             if conf:
-                if not conf.startswith("⚠️"):
+                if not conf.startswith("Cannot") and not conf.startswith("Buy") and not conf.startswith("Set"):
                     p = new_p
                     save_portfolio(p)
                     git_commit_portfolio()
@@ -833,9 +880,15 @@ def deep_research_data(cache, portfolio):
             earnings_this_week.append({"ticker": ticker, "date": earn_date, "days": earn_days})
 
         block = f"## {ticker} ({fund.get('industry') or fund.get('sector')})\n"
-        block += f"Position: {d['shares']:.4f} sh @ ${d['avg_cost']} | Now ${fund['price']:.2f} | P&L {pl_pct:+.1f}%\n"
+        block += (
+            f"Position: {d['shares']:.4f} sh @ ${d['avg_cost']} "
+            f"| Now ${fund['price']:.2f} | P&L {pl_pct:+.1f}%\n"
+        )
         if val:
-            block += f"Fair value: ${val['fair_value']} via {val['method']} ({val['upside_pct']:+.1f}%, {val['verdict']})\n"
+            block += (
+                f"Fair value: ${val['fair_value']} via {val['method']} "
+                f"({val['upside_pct']:+.1f}%, {val['verdict']})\n"
+            )
         block += f"Technical: {verdict}\n"
         if tech:
             block += f"Range: ${tech['support']}-${tech['resistance']}\n"
@@ -844,14 +897,25 @@ def deep_research_data(cache, portfolio):
         if insider:
             net = insider["net_value"]
             if net > 0:
-                block += f"Insiders ({INSIDER_LOOKBACK_DAYS}d): +${net/1e6:.2f}M net buys ({insider['buy_count']} buyers, {insider['sell_count']} sellers)\n"
+                block += (
+                    f"Insiders ({INSIDER_LOOKBACK_DAYS}d): "
+                    f"+${net/1e6:.2f}M net buys "
+                    f"({insider['buy_count']} buyers, {insider['sell_count']} sellers)\n"
+                )
             else:
-                block += f"Insiders ({INSIDER_LOOKBACK_DAYS}d): -${abs(net)/1e6:.2f}M net sales ({insider['buy_count']} buyers, {insider['sell_count']} sellers)\n"
+                block += (
+                    f"Insiders ({INSIDER_LOOKBACK_DAYS}d): "
+                    f"-${abs(net)/1e6:.2f}M net sales "
+                    f"({insider['buy_count']} buyers, {insider['sell_count']} sellers)\n"
+                )
         block += f"News:\n{news}"
         sections.append(block)
 
     full_context = "\n\n".join(sections)
-    earnings_str = ", ".join(f"{e['ticker']} {e['date']} ({e['days']}d)" for e in earnings_this_week) or "none"
+    earnings_str = (
+        ", ".join(f"{e['ticker']} {e['date']} ({e['days']}d)" for e in earnings_this_week)
+        or "none"
+    )
 
     prompt = (
         "You are a portfolio analyst. Below is the user's portfolio with valuation verdicts, "
@@ -862,7 +926,7 @@ def deep_research_data(cache, portfolio):
         "Return JSON:\n"
         "{\n"
         '  "executive_summary": {"overall_status":"...","risk":"...","opportunity":"..."},\n'
-        '  "earnings_this_week": [{"ticker":"AVGO","date":"May 14","days":5,"watch_for":"AI revenue commentary"}],\n'
+        '  "earnings_this_week": [{"ticker":"AVGO","date":"May 14","days":5,"watch_for":"..."}],\n'
         '  "action_priorities": {\n'
         '    "trim_take_profits": [{"ticker":"MU","action":"...","trigger":"..."}],\n'
         '    "monitor_for_exit": [{"ticker":"ORCL","concern":"...","watch_for":"..."}]\n'
@@ -879,9 +943,11 @@ def deep_research_data(cache, portfolio):
         "}\n\n"
         "Rules:\n"
         "- DO NOT include raw indicator numbers (RSI, P/E, etc.) in any output. Only verdicts.\n"
-        "- per_stock_status: every portfolio ticker categorized exactly once. 'news' is concrete recent event. "
+        "- per_stock_status: every portfolio ticker categorized exactly once. "
+        "'news' is a concrete recent event. "
         "Include 'insider' field ONLY if material insider activity is in the data above (omit otherwise).\n"
-        "- earnings_this_week: use only tickers with earnings <=7 days. Include 'watch_for' specific to each.\n"
+        "- earnings_this_week: use only tickers with earnings <=7 days. "
+        "Include 'watch_for' specific to each.\n"
         "- watch_at_open: exactly 3. macro_risks: exactly 3. action_priorities: max 5 combined.\n"
         "- sector_trends: 2-4 megatrends. watchlist_opportunities: 2-3 non-portfolio names.\n"
         "- All text concise for mobile."
@@ -1013,254 +1079,4 @@ def build_per_stock(d):
 
 
 def build_sector_trends(trends):
-    parts = [f"🌐 {bold('SECTOR &amp; MEGATRENDS')}"]
-    if not trends:
-        parts.append("\n<i>No notable sector moves.</i>")
-        return "\n".join(parts)
-    for t in trends:
-        line = f"\n• {bold(t.get('sector', '—'))}"
-        if t.get("outlook"):
-            line += f" — <i>{esc(t['outlook'])}</i>"
-        line += f"\n   {esc(t.get('trend', ''))}"
-        if t.get("your_exposure"):
-            tickers = " ".join(code('$' + x) for x in t["your_exposure"])
-            line += f"\n   Your exposure: {tickers}"
-        parts.append(line)
-    return "\n".join(parts)
-
-
-def build_watchlist_opps(opps):
-    parts = [f"🔭 {bold('OPPORTUNITIES OUTSIDE PORTFOLIO')}"]
-    if not opps:
-        parts.append("\n<i>No clear setups outside your portfolio today.</i>")
-        return "\n".join(parts)
-    for o in opps[:3]:
-        line = f"\n• {code('$' + o['ticker'])} — {esc(o.get('thesis', ''))}"
-        if o.get("why_now"):
-            line += f"\n   <i>Why now: {esc(o['why_now'])}</i>"
-        if o.get("fair_value_estimate"):
-            line += f"\n   Fair value est: {code('$' + str(o['fair_value_estimate']))}"
-        parts.append(line)
-    return "\n".join(parts)
-
-
-def build_brief_sections(brief_data):
-    return [
-        build_header(),
-        build_exec_summary(brief_data.get("executive_summary") or {}),
-        build_earnings_this_week(brief_data.get("earnings_this_week") or []),
-        build_action_priorities(brief_data.get("action_priorities") or {}),
-        build_watch_at_open(brief_data.get("watch_at_open") or []),
-        build_macro_risks(brief_data.get("macro_risks") or []),
-        build_per_stock(brief_data.get("per_stock_status") or {}),
-        build_sector_trends(brief_data.get("sector_trends") or []),
-        build_watchlist_opps(brief_data.get("watchlist_opportunities") or []),
-    ]
-
-
-# ===================================================================
-# SCOUT MODE
-# ===================================================================
-
-def scout_news(cache, portfolio_keys, watchlist):
-    items = fetch_news(portfolio_keys)
-    seen = set(cache["seen_news"])
-    new = [i for i in items if i["id"] not in seen]
-    cache["seen_news"] = list(seen | {i["id"] for i in items})
-    if not new:
-        return {"urgent": [], "candidates": []}
-
-    items_str = "\n".join(f"- {i['title']}" for i in new[:60])
-    prompt = (
-        "Analyze headlines for stock impact.\n"
-        f"Portfolio: {', '.join(portfolio_keys)}\n"
-        f"Watchlist: {', '.join(watchlist[:60])}\n\n"
-        f"News:\n{items_str}\n\n"
-        'Return JSON: {"urgent":[{"ticker":"MU","headline":"...","why":"...","severity":"critical|high"}],'
-        '"candidates":[{"ticker":"AMD","thesis":"<1 line>","trigger":"<news>"}]}\n\n'
-        "Urgent = >5% move TODAY. Max 5 candidates. JSON only."
-    )
-    raw = call_gemini(prompt, max_tokens=900, json_mode=True)
-    try:
-        return json.loads(raw)
-    except Exception as e:
-        print(f"news parse err: {e}")
-        return {"urgent": [], "candidates": []}
-
-
-def analyze_candidate(c, cache, portfolio_value):
-    ticker = c["ticker"].upper()
-    fund = get_fundamentals(ticker, cache)
-    val = pick_valuation(fund) if fund else None
-    tech = technical_signals(ticker)
-    sizing = None
-    if val and val.get("current_price"):
-        sizing = suggest_position_size(ticker, val["current_price"], portfolio_value)
-    return {
-        "ticker": ticker,
-        "thesis": c.get("thesis", ""),
-        "trigger": c.get("trigger", ""),
-        "valuation": val,
-        "tech": tech,
-        "sizing": sizing,
-    }
-
-
-def fmt_candidate_html(a):
-    val, tech, sizing = a.get("valuation"), a.get("tech"), a.get("sizing")
-    verdict = tech_verdict(tech)
-
-    if val and val["verdict"] == "undervalued" and verdict.startswith("oversold"):
-        action = "✅ STRONG BUY SETUP"
-        show_size = True
-    elif val and val["verdict"] == "undervalued":
-        action = "🟢 UNDERVALUED — wait for technicals"
-        show_size = False
-    elif verdict.startswith("oversold") and val and val["verdict"] == "fair":
-        action = "🟡 TECHNICAL SETUP"
-        show_size = False
-    elif val and val["verdict"] == "overvalued" and "overbought" in verdict:
-        action = "🔴 RICH + EXTENDED"
-        show_size = False
-    else:
-        return None
-
-    parts = [f"{code('$' + a['ticker'])} — {bold(action)}"]
-    if a.get("thesis"):
-        parts.append(f"<i>{esc(a['thesis'])}</i>")
-    if val:
-        upside_str = "{:+.1f}%".format(val['upside_pct'])
-        fv_str = "$" + str(val['fair_value'])
-        parts.append(f"\n{bold('Fair value:')} {code(fv_str)} ({code(upside_str)}, {esc(val['method'])})")
-    parts.append(f"{bold('Technical:')} <i>{esc(verdict)}</i>")
-    if tech:
-        sup_str = "$" + str(tech['support'])
-        res_str = "$" + str(tech['resistance'])
-        parts.append(f"Range: {code(sup_str)}–{code(res_str)}")
-    if show_size and sizing:
-        total_str = "$" + str(int(sizing['total_dollars']))
-        pct_str = "{}%".format(sizing['as_pct_portfolio'])
-        vol_str = "{}% vol".format(sizing['vol_annualized_pct'])
-        t1_str = "$" + str(int(sizing['tranche_1']))
-        t2_str = "$" + str(int(sizing['tranche_2']))
-        t3_str = "$" + str(int(sizing['tranche_3']))
-        parts.append(
-            f"\n{bold('Suggested size:')} {code(total_str)} "
-            f"({code(pct_str)} of portfolio, {esc(vol_str)})"
-        )
-        parts.append(f"Tranches: {code(t1_str)} / {code(t2_str)} / {code(t3_str)}")
-    if a.get("trigger"):
-        parts.append(f"\n<i>Trigger: {esc(a['trigger'])}</i>")
-    parts.append("<i>⚠️ Verify before acting.</i>")
-    return "\n".join(parts)
-
-
-# ===================================================================
-# MAIN MODES
-# ===================================================================
-
-def run_scout():
-    cache = load_cache()
-    portfolio = load_portfolio()
-    portfolio = process_telegram_messages(cache, portfolio)
-
-    portfolio_value = compute_portfolio_value(portfolio, cache)
-    dd_alert = check_drawdown_alert(portfolio_value, cache)
-    if dd_alert:
-        send_drawdown_alert(dd_alert)
-
-    keys = list(portfolio.keys())
-    watchlist = sorted(set(sum(WATCHLIST_BY_SECTOR.values(), [])) | set(keys))
-
-    result = scout_news(cache, keys, watchlist)
-    sections = []
-
-    if result.get("urgent"):
-        parts = [f"🚨 {bold('URGENT')}"]
-        for u in result["urgent"]:
-            sev = "🔴" if u.get("severity") == "critical" else "🟠"
-            parts.append(f"\n{sev} {code('$' + u['ticker'])} — {esc(u['headline'])}\n<i>{esc(u['why'])}</i>")
-        sections.append("\n".join(parts))
-
-    if result.get("candidates"):
-        analyzed = [analyze_candidate(c, cache, portfolio_value) for c in result["candidates"][:5]]
-        recs = [r for r in (fmt_candidate_html(a) for a in analyzed) if r]
-        if recs:
-            sections.append(f"🔍 {bold('CANDIDATES')}\n\n" + "\n\n———\n\n".join(recs))
-
-    save_cache(cache)
-    save_portfolio(portfolio)
-
-    if sections:
-        send_chunked(sections)
-
-
-def run_deep():
-    cache = load_cache()
-    portfolio = load_portfolio()
-    portfolio = process_telegram_messages(cache, portfolio)
-
-    portfolio_value = compute_portfolio_value(portfolio, cache)
-    dd_alert = check_drawdown_alert(portfolio_value, cache)
-    if dd_alert:
-        send_drawdown_alert(dd_alert)
-
-    brief_data = deep_research_data(cache, portfolio)
-    save_cache(cache)
-    save_portfolio(portfolio)
-
-    sections = build_brief_sections(brief_data)
-    send_chunked(sections)
-
-
-def run_listen():
-    cache = load_cache()
-    portfolio = load_portfolio()
-    portfolio = process_telegram_messages(cache, portfolio)
-
-    portfolio_value = compute_portfolio_value(portfolio, cache)
-    dd_alert = check_drawdown_alert(portfolio_value, cache)
-    if dd_alert:
-        send_drawdown_alert(dd_alert)
-
-    save_cache(cache)
-    save_portfolio(portfolio)
-
-
-if __name__ == "__main__":
-    mode = sys.argv[1] if len(sys.argv) > 1 else "scout"
-    if mode == "deep":
-        run_deep()
-    elif mode == "listen":
-        run_listen()
-    else:
-        run_scout()
-
-
-    prompt = (
-        "You are a portfolio analyst. Below is the user's portfolio with valuation verdicts, "
-        "technical state in plain English, recent news, next earnings, and insider activity. "
-        "Return STRICT JSON only.\n\n"
-        f"Earnings within {EARNINGS_HORIZON_DAYS} days: {earnings_str}\n\n"
-        f"{full_context}\n\n"
-        "Return JSON:\n"
-        "{\n"
-        '  "executive_summary": {"overall_status":"...","risk":"...","opportunity":"..."},\n'
-        '  "earnings_this_week": [{"ticker":"AVGO","date":"May 14","days":5,"watch_for":"AI revenue commentary"}],\n'
-        '  "action_priorities": {\n'
-        '    "trim_take_profits": [{"ticker":"MU","action":"...","trigger":"..."}],\n'
-        '    "monitor_for_exit": [{"ticker":"ORCL","concern":"...","watch_for":"..."}]\n'
-        "  },\n"
-        '  "watch_at_open": [{"ticker":"MU","zone":"$745-755","verdict":"...","scenario":"..."}],\n'
-        '  "macro_risks": ["...","...","..."],\n'
-        '  "per_stock_status": {\n'
-        '    "green": [{"ticker":"RKLB","state":"...","news":"...","insider":"...","action":"..."}],\n'
-        '    "yellow": [...],\n'
-        '    "red": [...]\n'
-        "  },\n"
-        '  "sector_trends": [{"sector":"...","trend":"...","your_exposure":["..."],"outlook":"..."}],\n'
-        '  "watchlist_opportunities": [{"ticker":"AMD","thesis":"...","why_now":"...","fair_value_estimate":220}]\n'
-        "}\n\n"
-        "Rules:\n"
-        "- DO NOT include raw indicator numbers (RSI, P/E, etc.) in any output. Only verdicts.\n"
-        "- per_stock_status: every portfolio ticker categorized exactly once. 'news' is concrete recent event.
+    parts = [f"🌐 {bold('SECTOR &amp; MEGATRENDS')}
