@@ -1240,7 +1240,6 @@ if __name__ == "__main__":
         run_listen()
     else:
         run_scout()
- + a['ticker'])} — {bold(action)}"]
     if a.get("thesis"):
         parts.append(f"<i>{esc(a['thesis'])}</i>")
     if val:
