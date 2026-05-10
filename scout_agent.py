@@ -879,4 +879,388 @@ def deep_research_data(cache, portfolio):
         "}\n\n"
         "Rules:\n"
         "- DO NOT include raw indicator numbers (RSI, P/E, etc.) in any output. Only verdicts.\n"
+        "- per_stock_status: every portfolio ticker categorized exactly once. 'news' is concrete recent event. "
+        "Include 'insider' field ONLY if material insider activity is in the data above (omit otherwise).\n"
+        "- earnings_this_week: use only tickers with earnings <=7 days. Include 'watch_for' specific to each.\n"
+        "- watch_at_open: exactly 3. macro_risks: exactly 3. action_priorities: max 5 combined.\n"
+        "- sector_trends: 2-4 megatrends. watchlist_opportunities: 2-3 non-portfolio names.\n"
+        "- All text concise for mobile."
+    )
+
+    raw = call_gemini(prompt, max_tokens=10000, model=MODEL_DEEP, json_mode=True)
+    try:
+        return json.loads(raw)
+    except Exception as e:
+        print(f"deep parse err: {e}")
+        return {
+            "executive_summary": {"overall_status": "Parse error", "risk": "—", "opportunity": "—"},
+            "earnings_this_week": [],
+            "action_priorities": {"trim_take_profits": [], "monitor_for_exit": []},
+            "watch_at_open": [],
+            "macro_risks": [],
+            "per_stock_status": {"green": [], "yellow": [], "red": []},
+            "sector_trends": [],
+            "watchlist_opportunities": [],
+        }
+
+
+# ===================================================================
+# MESSAGE BUILDER
+# ===================================================================
+
+def build_header():
+    bkk = datetime.utcnow() + timedelta(hours=7)
+    return (
+        f"📊 {bold('PRE-MARKET DEEP RESEARCH')}\n"
+        f"<i>{esc(bkk.strftime('%b %d, %Y'))} · {esc(bkk.strftime('%H:%M'))} BKK · 2hr to US open</i>"
+    )
+
+
+def build_exec_summary(d):
+    return (
+        f"📑 {bold('EXECUTIVE SUMMARY')}\n\n"
+        f"{bold('Status:')} {esc(d.get('overall_status', '—'))}\n\n"
+        f"{bold('Top Risk:')} {esc(d.get('risk', '—'))}\n\n"
+        f"{bold('Opportunity:')} {esc(d.get('opportunity', '—'))}"
+    )
+
+
+def build_earnings_this_week(items):
+    parts = [f"📅 {bold('EARNINGS THIS WEEK')}"]
+    if not items:
+        parts.append("\n<i>No portfolio earnings in next 7 days.</i>")
+        return "\n".join(parts)
+    for it in items:
+        line = f"\n• {code('$' + it['ticker'])} — {esc(it.get('date', '?'))}"
+        if it.get("days") is not None:
+            line += f" <i>(in {it['days']}d)</i>"
+        if it.get("watch_for"):
+            line += f"\n   ▸ {esc(it['watch_for'])}"
+        parts.append(line)
+    return "\n".join(parts)
+
+
+def build_action_priorities(d):
+    parts = [f"🎯 {bold('ACTION PRIORITIES')}"]
+    trim = d.get("trim_take_profits") or []
+    if trim:
+        parts.append(f"\n💰 {bold('Trim / Take Profits')}")
+        for it in trim:
+            line = f"• {code('$' + it['ticker'])} — {esc(it.get('action', ''))}"
+            if it.get("trigger"):
+                line += f"\n   <i>{esc(it['trigger'])}</i>"
+            parts.append(line)
+    exit_w = d.get("monitor_for_exit") or []
+    if exit_w:
+        parts.append(f"\n🚪 {bold('Monitor for Exit')}")
+        for it in exit_w:
+            line = f"• {code('$' + it['ticker'])} — {esc(it.get('concern', ''))}"
+            if it.get("watch_for"):
+                line += f"\n   <i>Watch: {esc(it['watch_for'])}</i>"
+            parts.append(line)
+    if not trim and not exit_w:
+        parts.append("\n<i>No high-priority actions today.</i>")
+    return "\n".join(parts)
+
+
+def build_watch_at_open(items):
+    parts = [f"👁️ {bold('WATCH AT OPEN')}"]
+    if not items:
+        parts.append("\n<i>No specific tickers flagged.</i>")
+        return "\n".join(parts)
+    for it in items[:3]:
+        line = f"\n• {code('$' + it['ticker'])}"
+        if it.get("zone"):
+            line += f"   Zone: {code(it['zone'])}"
+        if it.get("verdict"):
+            line += f"\n   State: <i>{esc(it['verdict'])}</i>"
+        if it.get("scenario"):
+            line += f"\n   {esc(it['scenario'])}"
+        parts.append(line)
+    return "\n".join(parts)
+
+
+def build_macro_risks(risks):
+    parts = [f"⚠️ {bold('TOP 3 MACRO RISKS')}"]
+    if not risks:
+        parts.append("\n<i>No material macro risks.</i>")
+    for i, r in enumerate(risks[:3], 1):
+        parts.append(f"\n{i}. {esc(r)}")
+    return "\n".join(parts)
+
+
+def build_per_stock(d):
+    parts = [f"📋 {bold('PER-STOCK CATALYSTS &amp; STATUS')}"]
+
+    def add_group(label, emoji, items):
+        if not items:
+            return
+        parts.append(f"\n{emoji} {bold(label)}")
+        for it in items:
+            line = f"• {code('$' + it['ticker'])}: {esc(it.get('state', ''))}"
+            if it.get("news"):
+                line += f"\n   📰 <i>{esc(it['news'])}</i>"
+            if it.get("insider"):
+                line += f"\n   🤝 <i>{esc(it['insider'])}</i>"
+            if it.get("action"):
+                line += f"\n   ▸ {esc(it['action'])}"
+            parts.append(line)
+
+    add_group("Green", "🟢", d.get("green") or [])
+    add_group("Yellow", "🟡", d.get("yellow") or [])
+    add_group("Red", "🔴", d.get("red") or [])
+    return "\n".join(parts)
+
+
+def build_sector_trends(trends):
+    parts = [f"🌐 {bold('SECTOR &amp; MEGATRENDS')}"]
+    if not trends:
+        parts.append("\n<i>No notable sector moves.</i>")
+        return "\n".join(parts)
+    for t in trends:
+        line = f"\n• {bold(t.get('sector', '—'))}"
+        if t.get("outlook"):
+            line += f" — <i>{esc(t['outlook'])}</i>"
+        line += f"\n   {esc(t.get('trend', ''))}"
+        if t.get("your_exposure"):
+            tickers = " ".join(code('$' + x) for x in t["your_exposure"])
+            line += f"\n   Your exposure: {tickers}"
+        parts.append(line)
+    return "\n".join(parts)
+
+
+def build_watchlist_opps(opps):
+    parts = [f"🔭 {bold('OPPORTUNITIES OUTSIDE PORTFOLIO')}"]
+    if not opps:
+        parts.append("\n<i>No clear setups outside your portfolio today.</i>")
+        return "\n".join(parts)
+    for o in opps[:3]:
+        line = f"\n• {code('$' + o['ticker'])} — {esc(o.get('thesis', ''))}"
+        if o.get("why_now"):
+            line += f"\n   <i>Why now: {esc(o['why_now'])}</i>"
+        if o.get("fair_value_estimate"):
+            line += f"\n   Fair value est: {code('$' + str(o['fair_value_estimate']))}"
+        parts.append(line)
+    return "\n".join(parts)
+
+
+def build_brief_sections(brief_data):
+    return [
+        build_header(),
+        build_exec_summary(brief_data.get("executive_summary") or {}),
+        build_earnings_this_week(brief_data.get("earnings_this_week") or []),
+        build_action_priorities(brief_data.get("action_priorities") or {}),
+        build_watch_at_open(brief_data.get("watch_at_open") or []),
+        build_macro_risks(brief_data.get("macro_risks") or []),
+        build_per_stock(brief_data.get("per_stock_status") or {}),
+        build_sector_trends(brief_data.get("sector_trends") or []),
+        build_watchlist_opps(brief_data.get("watchlist_opportunities") or []),
+    ]
+
+
+# ===================================================================
+# SCOUT MODE
+# ===================================================================
+
+def scout_news(cache, portfolio_keys, watchlist):
+    items = fetch_news(portfolio_keys)
+    seen = set(cache["seen_news"])
+    new = [i for i in items if i["id"] not in seen]
+    cache["seen_news"] = list(seen | {i["id"] for i in items})
+    if not new:
+        return {"urgent": [], "candidates": []}
+
+    items_str = "\n".join(f"- {i['title']}" for i in new[:60])
+    prompt = (
+        "Analyze headlines for stock impact.\n"
+        f"Portfolio: {', '.join(portfolio_keys)}\n"
+        f"Watchlist: {', '.join(watchlist[:60])}\n\n"
+        f"News:\n{items_str}\n\n"
+        'Return JSON: {"urgent":[{"ticker":"MU","headline":"...","why":"...","severity":"critical|high"}],'
+        '"candidates":[{"ticker":"AMD","thesis":"<1 line>","trigger":"<news>"}]}\n\n'
+        "Urgent = >5% move TODAY. Max 5 candidates. JSON only."
+    )
+    raw = call_gemini(prompt, max_tokens=900, json_mode=True)
+    try:
+        return json.loads(raw)
+    except Exception as e:
+        print(f"news parse err: {e}")
+        return {"urgent": [], "candidates": []}
+
+
+def analyze_candidate(c, cache, portfolio_value):
+    ticker = c["ticker"].upper()
+    fund = get_fundamentals(ticker, cache)
+    val = pick_valuation(fund) if fund else None
+    tech = technical_signals(ticker)
+    sizing = None
+    if val and val.get("current_price"):
+        sizing = suggest_position_size(ticker, val["current_price"], portfolio_value)
+    return {
+        "ticker": ticker,
+        "thesis": c.get("thesis", ""),
+        "trigger": c.get("trigger", ""),
+        "valuation": val,
+        "tech": tech,
+        "sizing": sizing,
+    }
+
+
+def fmt_candidate_html(a):
+    val, tech, sizing = a.get("valuation"), a.get("tech"), a.get("sizing")
+    verdict = tech_verdict(tech)
+
+    if val and val["verdict"] == "undervalued" and verdict.startswith("oversold"):
+        action = "✅ STRONG BUY SETUP"
+        show_size = True
+    elif val and val["verdict"] == "undervalued":
+        action = "🟢 UNDERVALUED — wait for technicals"
+        show_size = False
+    elif verdict.startswith("oversold") and val and val["verdict"] == "fair":
+        action = "🟡 TECHNICAL SETUP"
+        show_size = False
+    elif val and val["verdict"] == "overvalued" and "overbought" in verdict:
+        action = "🔴 RICH + EXTENDED"
+        show_size = False
+    else:
+        return None
+
+    parts = [f"{code('$' + a['ticker'])} — {bold(action)}"]
+    if a.get("thesis"):
+        parts.append(f"<i>{esc(a['thesis'])}</i>")
+    if val:
+        upside_str = "{:+.1f}%".format(val['upside_pct'])
+        fv_str = "$" + str(val['fair_value'])
+        parts.append(f"\n{bold('Fair value:')} {code(fv_str)} ({code(upside_str)}, {esc(val['method'])})")
+    parts.append(f"{bold('Technical:')} <i>{esc(verdict)}</i>")
+    if tech:
+        sup_str = "$" + str(tech['support'])
+        res_str = "$" + str(tech['resistance'])
+        parts.append(f"Range: {code(sup_str)}–{code(res_str)}")
+    if show_size and sizing:
+        total_str = "$" + str(int(sizing['total_dollars']))
+        pct_str = "{}%".format(sizing['as_pct_portfolio'])
+        vol_str = "{}% vol".format(sizing['vol_annualized_pct'])
+        t1_str = "$" + str(int(sizing['tranche_1']))
+        t2_str = "$" + str(int(sizing['tranche_2']))
+        t3_str = "$" + str(int(sizing['tranche_3']))
+        parts.append(
+            f"\n{bold('Suggested size:')} {code(total_str)} "
+            f"({code(pct_str)} of portfolio, {esc(vol_str)})"
+        )
+        parts.append(f"Tranches: {code(t1_str)} / {code(t2_str)} / {code(t3_str)}")
+    if a.get("trigger"):
+        parts.append(f"\n<i>Trigger: {esc(a['trigger'])}</i>")
+    parts.append("<i>⚠️ Verify before acting.</i>")
+    return "\n".join(parts)
+
+
+# ===================================================================
+# MAIN MODES
+# ===================================================================
+
+def run_scout():
+    cache = load_cache()
+    portfolio = load_portfolio()
+    portfolio = process_telegram_messages(cache, portfolio)
+
+    portfolio_value = compute_portfolio_value(portfolio, cache)
+    dd_alert = check_drawdown_alert(portfolio_value, cache)
+    if dd_alert:
+        send_drawdown_alert(dd_alert)
+
+    keys = list(portfolio.keys())
+    watchlist = sorted(set(sum(WATCHLIST_BY_SECTOR.values(), [])) | set(keys))
+
+    result = scout_news(cache, keys, watchlist)
+    sections = []
+
+    if result.get("urgent"):
+        parts = [f"🚨 {bold('URGENT')}"]
+        for u in result["urgent"]:
+            sev = "🔴" if u.get("severity") == "critical" else "🟠"
+            parts.append(f"\n{sev} {code('$' + u['ticker'])} — {esc(u['headline'])}\n<i>{esc(u['why'])}</i>")
+        sections.append("\n".join(parts))
+
+    if result.get("candidates"):
+        analyzed = [analyze_candidate(c, cache, portfolio_value) for c in result["candidates"][:5]]
+        recs = [r for r in (fmt_candidate_html(a) for a in analyzed) if r]
+        if recs:
+            sections.append(f"🔍 {bold('CANDIDATES')}\n\n" + "\n\n———\n\n".join(recs))
+
+    save_cache(cache)
+    save_portfolio(portfolio)
+
+    if sections:
+        send_chunked(sections)
+
+
+def run_deep():
+    cache = load_cache()
+    portfolio = load_portfolio()
+    portfolio = process_telegram_messages(cache, portfolio)
+
+    portfolio_value = compute_portfolio_value(portfolio, cache)
+    dd_alert = check_drawdown_alert(portfolio_value, cache)
+    if dd_alert:
+        send_drawdown_alert(dd_alert)
+
+    brief_data = deep_research_data(cache, portfolio)
+    save_cache(cache)
+    save_portfolio(portfolio)
+
+    sections = build_brief_sections(brief_data)
+    send_chunked(sections)
+
+
+def run_listen():
+    cache = load_cache()
+    portfolio = load_portfolio()
+    portfolio = process_telegram_messages(cache, portfolio)
+
+    portfolio_value = compute_portfolio_value(portfolio, cache)
+    dd_alert = check_drawdown_alert(portfolio_value, cache)
+    if dd_alert:
+        send_drawdown_alert(dd_alert)
+
+    save_cache(cache)
+    save_portfolio(portfolio)
+
+
+if __name__ == "__main__":
+    mode = sys.argv[1] if len(sys.argv) > 1 else "scout"
+    if mode == "deep":
+        run_deep()
+    elif mode == "listen":
+        run_listen()
+    else:
+        run_scout()
+
+
+    prompt = (
+        "You are a portfolio analyst. Below is the user's portfolio with valuation verdicts, "
+        "technical state in plain English, recent news, next earnings, and insider activity. "
+        "Return STRICT JSON only.\n\n"
+        f"Earnings within {EARNINGS_HORIZON_DAYS} days: {earnings_str}\n\n"
+        f"{full_context}\n\n"
+        "Return JSON:\n"
+        "{\n"
+        '  "executive_summary": {"overall_status":"...","risk":"...","opportunity":"..."},\n'
+        '  "earnings_this_week": [{"ticker":"AVGO","date":"May 14","days":5,"watch_for":"AI revenue commentary"}],\n'
+        '  "action_priorities": {\n'
+        '    "trim_take_profits": [{"ticker":"MU","action":"...","trigger":"..."}],\n'
+        '    "monitor_for_exit": [{"ticker":"ORCL","concern":"...","watch_for":"..."}]\n'
+        "  },\n"
+        '  "watch_at_open": [{"ticker":"MU","zone":"$745-755","verdict":"...","scenario":"..."}],\n'
+        '  "macro_risks": ["...","...","..."],\n'
+        '  "per_stock_status": {\n'
+        '    "green": [{"ticker":"RKLB","state":"...","news":"...","insider":"...","action":"..."}],\n'
+        '    "yellow": [...],\n'
+        '    "red": [...]\n'
+        "  },\n"
+        '  "sector_trends": [{"sector":"...","trend":"...","your_exposure":["..."],"outlook":"..."}],\n'
+        '  "watchlist_opportunities": [{"ticker":"AMD","thesis":"...","why_now":"...","fair_value_estimate":220}]\n'
+        "}\n\n"
+        "Rules:\n"
+        "- DO NOT include raw indicator numbers (RSI, P/E, etc.) in any output. Only verdicts.\n"
         "- per_stock_status: every portfolio ticker categorized exactly once. 'news' is concrete recent event.
