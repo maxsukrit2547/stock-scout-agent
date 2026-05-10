@@ -1157,7 +1157,7 @@ def fmt_candidate_html(a):
     else:
         return None
 
-    parts = [f"{code('
+    parts = [f"{code('$' + a['ticker'])} — {bold(action)}"]
 
 
 # ===================================================================
