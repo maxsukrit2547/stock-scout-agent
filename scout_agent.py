@@ -459,10 +459,13 @@ def send_drawdown_alert(alert):
         emoji, label = "🚨", "DRAWDOWN ALARM"
     else:
         emoji, label = "⚠️", "DRAWDOWN WARNING"
+    current_str = "$" + str(round(alert['current']))
+    peak_str = "$" + str(round(alert['peak']))
+    dd_str = "{:.1f}%".format(alert['dd_pct'])
     msg = (
         f"{emoji} {bold(label)}\n\n"
-        f"Portfolio: {code('$' + str(round(alert['current'])))} ({code(f'{alert[\"dd_pct\"]:.1f}%')} from peak)\n"
-        f"Peak: {code('$' + str(round(alert['peak'])))} on {esc(alert['peak_date'])}\n\n"
+        f"Portfolio: {code(current_str)} ({code(dd_str)} from peak)\n"
+        f"Peak: {code(peak_str)} on {esc(alert['peak_date'])}\n\n"
         f"<i>Review thesis on biggest losers before adding more. "
         f"Don't deploy fresh capital into falling positions until you've confirmed fundamentals are intact.</i>"
     )
@@ -1154,24 +1157,110 @@ def fmt_candidate_html(a):
     else:
         return None
 
-    parts = [f"{code('$' + a['ticker'])} — {bold(action)}"]
+    parts = [f"{code('
+
+
+# ===================================================================
+# MAIN MODES
+# ===================================================================
+
+def run_scout():
+    cache = load_cache()
+    portfolio = load_portfolio()
+    portfolio = process_telegram_messages(cache, portfolio)
+
+    portfolio_value = compute_portfolio_value(portfolio, cache)
+    dd_alert = check_drawdown_alert(portfolio_value, cache)
+    if dd_alert:
+        send_drawdown_alert(dd_alert)
+
+    keys = list(portfolio.keys())
+    watchlist = sorted(set(sum(WATCHLIST_BY_SECTOR.values(), [])) | set(keys))
+
+    result = scout_news(cache, keys, watchlist)
+    sections = []
+
+    if result.get("urgent"):
+        parts = [f"🚨 {bold('URGENT')}"]
+        for u in result["urgent"]:
+            sev = "🔴" if u.get("severity") == "critical" else "🟠"
+            parts.append(f"\n{sev} {code('$' + u['ticker'])} — {esc(u['headline'])}\n<i>{esc(u['why'])}</i>")
+        sections.append("\n".join(parts))
+
+    if result.get("candidates"):
+        analyzed = [analyze_candidate(c, cache, portfolio_value) for c in result["candidates"][:5]]
+        recs = [r for r in (fmt_candidate_html(a) for a in analyzed) if r]
+        if recs:
+            sections.append(f"🔍 {bold('CANDIDATES')}\n\n" + "\n\n———\n\n".join(recs))
+
+    save_cache(cache)
+    save_portfolio(portfolio)
+
+    if sections:
+        send_chunked(sections)
+
+
+def run_deep():
+    cache = load_cache()
+    portfolio = load_portfolio()
+    portfolio = process_telegram_messages(cache, portfolio)
+
+    portfolio_value = compute_portfolio_value(portfolio, cache)
+    dd_alert = check_drawdown_alert(portfolio_value, cache)
+    if dd_alert:
+        send_drawdown_alert(dd_alert)
+
+    brief_data = deep_research_data(cache, portfolio)
+    save_cache(cache)
+    save_portfolio(portfolio)
+
+    sections = build_brief_sections(brief_data)
+    send_chunked(sections)
+
+
+def run_listen():
+    cache = load_cache()
+    portfolio = load_portfolio()
+    portfolio = process_telegram_messages(cache, portfolio)
+
+    portfolio_value = compute_portfolio_value(portfolio, cache)
+    dd_alert = check_drawdown_alert(portfolio_value, cache)
+    if dd_alert:
+        send_drawdown_alert(dd_alert)
+
+    save_cache(cache)
+    save_portfolio(portfolio)
+
+
+if __name__ == "__main__":
+    mode = sys.argv[1] if len(sys.argv) > 1 else "scout"
+    if mode == "deep":
+        run_deep()
+    elif mode == "listen":
+        run_listen()
+    else:
+        run_scout()
+ + a['ticker'])} — {bold(action)}"]
     if a.get("thesis"):
         parts.append(f"<i>{esc(a['thesis'])}</i>")
     if val:
-        parts.append(f"\n{bold('Fair value:')} {code('$' + str(val['fair_value']))} ({code(f'{val[\"upside_pct\"]:+.1f}%')}, {esc(val['method'])})")
+        upside_str = "{:+.1f}%".format(val['upside_pct'])
+        fv_str = "$" + str(val['fair_value'])
+        parts.append(f"\n{bold('Fair value:')} {code(fv_str)} ({code(upside_str)}, {esc(val['method'])})")
     parts.append(f"{bold('Technical:')} <i>{esc(verdict)}</i>")
     if tech:
-        parts.append(f"Range: {code('$' + str(tech['support']))}–{code('$' + str(tech['resistance']))}")
+        sup_str = "$" + str(tech['support'])
+        res_str = "$" + str(tech['resistance'])
+        parts.append(f"Range: {code(sup_str)}–{code(res_str)}")
     if show_size and sizing:
-        parts.append(
-            f"\n{bold('Suggested size:')} {code('$' + str(int(sizing['total_dollars'])))} "
-            f"({code(f'{sizing[\"as_pct_portfolio\"]}%')} of portfolio, {esc(f\"{sizing['vol_annualized_pct']}% vol\")})"
-        )
-        parts.append(
-            f"Tranches: {code('$' + str(int(sizing['tranche_1'])))} / "
-            f"{code('$' + str(int(sizing['tranche_2'])))} / "
-            f"{code('$' + str(int(sizing['tranche_3'])))}"
-        )
+        total_str = "$" + str(int(sizing['total_dollars']))
+        pct_str = "{}%".format(sizing['as_pct_portfolio'])
+        vol_str = "{}% vol".format(sizing['vol_annualized_pct'])
+        t1_str = "$" + str(int(sizing['tranche_1']))
+        t2_str = "$" + str(int(sizing['tranche_2']))
+        t3_str = "$" + str(int(sizing['tranche_3']))
+        parts.append(f"\n{bold('Suggested size:')} {code(total_str)} ({code(pct_str)} of portfolio, {esc(vol_str)})")
+        parts.append(f"Tranches: {code(t1_str)} / {code(t2_str)} / {code(t3_str)}")
     if a.get("trigger"):
         parts.append(f"\n<i>Trigger: {esc(a['trigger'])}</i>")
     parts.append("<i>⚠️ Verify before acting.</i>")
