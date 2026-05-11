@@ -1,0 +1,53 @@
+name: Stock News Agent
+
+on:
+  schedule:
+    # Urgent check every 15 min during US market hours + pre/after market
+    # 12:00–22:00 UTC covers 7 AM ET pre-market through 6 PM ET after-hours
+    - cron: '*/15 12-22 * * 1-5'
+    # Daily brief at 13:00 UTC = 20:00 Bangkok, weekdays
+    - cron: '0 13 * * 1-5'
+  workflow_dispatch:  # allow manual trigger
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: seen_items.json
+          key: news-cache-${{ github.run_id }}
+          restore-keys: news-cache-
+
+      - run: pip install anthropic feedparser requests
+
+      - name: Pick mode
+        id: mode
+        run: |
+          MIN=$(date -u +%M)
+          HOUR=$(date -u +%H)
+          if [ "$HOUR" = "13" ] && [ "$MIN" -lt "10" ]; then
+            echo "mode=daily" >> $GITHUB_OUTPUT
+          else
+            echo "mode=urgent" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python news_agent.py ${{ steps.mode.outputs.mode }}
+
+      - name: Save cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: seen_items.json
+          key: news-cache-${{ github.run_id }}
