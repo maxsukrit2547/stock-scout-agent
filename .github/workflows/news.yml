@@ -2,12 +2,9 @@ name: Stock News Agent
 
 on:
   schedule:
-    # Urgent check every 15 min during US market hours + pre/after market
-    # 12:00–22:00 UTC covers 7 AM ET pre-market through 6 PM ET after-hours
-    - cron: '*/15 12-22 * * 1-5'
-    # Daily brief at 13:00 UTC = 20:00 Bangkok, weekdays
-    - cron: '0 13 * * 1-5'
-  workflow_dispatch:  # allow manual trigger
+    - cron: '*/15 12-22 * * 1-5'   # Urgent: every 15 min, US market hours, weekdays
+    - cron: '0 13 * * 1-5'         # Daily brief: 13:00 UTC = 20:00 Bangkok
+  workflow_dispatch:                # allow manual trigger
 
 jobs:
   agent:
@@ -16,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
-        with: { python-version: '3.14' }
+        with: { python-version: '3.11' }
 
       - name: Restore cache
         uses: actions/cache@v4
@@ -25,7 +22,7 @@ jobs:
           key: news-cache-${{ github.run_id }}
           restore-keys: news-cache-
 
-      - run: pip install anthropic feedparser requests
+      - run: pip install google-genai feedparser requests
 
       - name: Pick mode
         id: mode
@@ -40,7 +37,7 @@ jobs:
 
       - name: Run agent
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python news_agent.py ${{ steps.mode.outputs.mode }}
