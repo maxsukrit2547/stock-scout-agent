@@ -1005,7 +1005,7 @@ def _market_status():
     now_et    = now_utc + et_offset
     # ────────────────────────────────────────────────────────────────
 
-       today_open  = now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
+    today_open  = now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
     today_close = now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
     is_weekday  = now_et.weekday() < 5
 
