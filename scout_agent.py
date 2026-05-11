@@ -251,7 +251,9 @@ def get_next_earnings(ticker):
             date = date.to_pydatetime()
         if hasattr(date, "tzinfo") and date.tzinfo:
             date = date.replace(tzinfo=None)
-        days = (date - datetime.utcnow()).days
+            today_utc = datetime.utcnow().date()
+            earn_date_only = date.date() if hasattr(date, "date") else date
+            days = (earn_date_only - today_utc).days
         return date.strftime("%b %d"), days
     except Exception as e:
         print(f"earnings err {ticker}: {e}")
@@ -888,7 +890,7 @@ def deep_research_data(cache, portfolio):
         earn_date, earn_days = get_next_earnings(ticker)
         insider = get_insider_activity(ticker)
 
-        if earn_date and earn_days is not None and 0 <= earn_days <= EARNINGS_HORIZON_DAYS:
+        if earn_date and earn_days is not None and -1 <= earn_days <= EARNINGS_HORIZON_DAYS:
             earnings_this_week.append({"ticker": ticker, "date": earn_date, "days": earn_days})
 
         block  = f"## {ticker} ({fund.get('industry') or fund.get('sector')})\n"
