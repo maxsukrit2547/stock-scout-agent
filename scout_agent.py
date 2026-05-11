@@ -931,7 +931,12 @@ def deep_research_data(cache, portfolio):
         pl_pct  = (fund["price"] - d["avg_cost"]) / d["avg_cost"] * 100
         news    = fetch_ticker_news(ticker, limit=8)
 
-        earn_date, earn_days = get_next_earnings(ticker)
+        # NASDAQ calendar first (more reliable), fall back to yfinance
+        if ticker in nasdaq_calendar:
+            earn_date, earn_days = nasdaq_calendar[ticker]
+        else:
+            earn_date, earn_days = get_next_earnings(ticker)
+
         insider = get_insider_activity(ticker)
 
         if earn_date and earn_days is not None and -1 <= earn_days <= EARNINGS_HORIZON_DAYS:
