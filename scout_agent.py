@@ -297,6 +297,42 @@ def get_insider_activity(ticker, days=INSIDER_LOOKBACK_DAYS):
         print(f"insider err {ticker}: {e}")
         return None
 
+def fetch_nasdaq_earnings_calendar(days_ahead=8):
+    """
+    Fetch upcoming earnings from NASDAQ's public calendar API.
+    No API key required.
+    Returns dict: { 'TICKER': ('May 11', days_from_today) }
+    """
+    today_utc = datetime.utcnow().date()
+    calendar  = {}
+    headers   = {
+        "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept":          "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    # Scan from yesterday (-1) to days_ahead to catch same-day releases
+    for delta in range(-1, days_ahead):
+        check_date = today_utc + timedelta(days=delta)
+        url = f"https://api.nasdaq.com/api/calendar/earnings?date={check_date}"
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code != 200:
+                continue
+            rows = ((r.json().get("data") or {}).get("rows")) or []
+            for row in rows:
+                symbol = (row.get("symbol") or "").upper().strip()
+                if symbol and symbol not in calendar:
+                    calendar[symbol] = (
+                        check_date.strftime("%b %d"),
+                        delta,
+                    )
+        except Exception as e:
+            print(f"nasdaq cal err {check_date}: {e}")
+
+    print(f"NASDAQ calendar: {len(calendar)} upcoming earnings fetched")
+    return calendar
+
 
 # ===================================================================
 # ANALYSIS: valuation, technicals, volatility, sizing
@@ -876,6 +912,14 @@ def process_telegram_messages(cache, portfolio):
 def deep_research_data(cache, portfolio):
     sections = []
     earnings_this_week = []
+
+     # ── Pre-fetch earnings calendar from NASDAQ once (faster + more reliable) ──
+    nasdaq_calendar = {}
+    try:
+        nasdaq_calendar = fetch_nasdaq_earnings_calendar(days_ahead=EARNINGS_HORIZON_DAYS + 1)
+    except Exception as e:
+        print(f"nasdaq calendar err: {e}")
+    # ─────────────────────────────────────────────────────────────────────────────
 
     for ticker, d in portfolio.items():
         fund = get_fundamentals(ticker, cache)
