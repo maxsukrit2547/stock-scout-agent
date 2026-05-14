@@ -763,7 +763,7 @@ def score_news_sentiment(ticker, recent_headlines):
         'Return ONLY: {"s":<int -10 to 10>}\n'
         '-10=major negative,0=neutral,+10=very bullish catalyst'
     )
-    raw = call_gemini(prompt, max_tokens=15, json_mode=True, model=MODEL_LIGHT)
+    raw = call_gemini(prompt, max_tokens=50, json_mode=True, model=MODEL_LIGHT)
     try:
         score = int(max(-10, min(10, round(float(json.loads(raw).get("s", 0))))))
         _macro_cache[cache_key] = score
