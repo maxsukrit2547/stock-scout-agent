@@ -207,6 +207,7 @@ def get_fundamentals(ticker, cache):
         data = {
             "ticker":    key,
             "price":     info.get("currentPrice") or info.get("regularMarketPrice"),
+            "shares_outstanding": info.get("sharesOutstanding"),
             "pe":        info.get("trailingPE"),
             "fwd_pe":    info.get("forwardPE"),
             "ps":        info.get("priceToSalesTrailing12Months"),
