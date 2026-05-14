@@ -1504,7 +1504,9 @@ def deep_research_data(cache, portfolio):
         if ticker in nasdaq_calendar:
             earn_date, earn_days = nasdaq_calendar[ticker]
         else:
-            earn_date, earn_days = get_next_earnings(ticker)
+            earn_date, earn_days = fetch_finnhub_earnings(ticker)
+            if earn_date is None:
+                earn_date, earn_days = get_next_earnings(ticker)
 
         insider = get_insider_activity(ticker)
 
