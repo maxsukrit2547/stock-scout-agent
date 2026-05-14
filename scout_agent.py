@@ -1783,17 +1783,54 @@ def build_sector_trends(trends):
 
 
 def enrich_watchlist_opps(opps, cache):
+    """
+    Uses full enhanced_valuation() for each watchlist stock.
+    Verifies AI fair value against quantitative calculation.
+    """
     for o in opps:
         ticker = (o.get("ticker") or "").upper()
         if not ticker:
             continue
-        fund = get_fundamentals(ticker, cache)
-        if fund and fund.get("price"):
-            o["current_price"] = round(fund["price"], 2)
-            fv = o.get("fair_value_estimate")
-            if fv and fund["price"]:
-                o["upside_pct"] = round((fv - fund["price"]) / fund["price"] * 100, 1)
+
+        ev = enhanced_valuation(ticker, cache)
+        if not ev:
+            o["verified_fair_value"]  = None
+            o["verified_method"]      = "insufficient data"
+            o["confidence_score"]     = 0
+            o["fv_verified"]          = False
+            continue
+
+        price = ev["current_price"]
+        o["current_price"]     = price
+        o["verified_fair_value"] = ev["final_fair_value"]
+        o["verified_upside_pct"] = ev["upside_pct"]
+        o["confidence_score"]    = ev["confidence_score"]
+        o["mos_pct"]             = ev["mos_pct"]
+        o["alert_trigger"]       = ev["alert_trigger"]
+        o["divergence_flag"]     = ev["divergence_flag"]
+        o["implied_growth"]      = ev.get("implied_growth")
+        o["historical_growth"]   = ev.get("historical_growth")
+        o["sensitivity"]         = ev.get("sensitivity")
+        o["tier"]                = ev["tier"]
+        o["buy_signal"]          = ev["buy_signal"]
+        o["data_sources"]        = ev.get("data_sources", [])
+        o["models"]              = ev.get("models", {})
+
+        # Cross-check AI estimate vs quantitative
+        ai_fv = o.get("fair_value_estimate")
+        if ai_fv and ev["final_fair_value"]:
+            diff = abs(ai_fv - ev["final_fair_value"]) / ev["final_fair_value"] * 100
+            o["fv_discrepancy_pct"] = round(diff, 1)
+            o["fv_verified"]        = diff <= 25
+        else:
+            o["fv_verified"] = False
+
+        # Upside to AI estimate
+        if ai_fv and price:
+            o["upside_pct"] = round((ai_fv - price) / price * 100, 1)
+
     return opps
+
 
 
 def build_watchlist_opps(opps):
