@@ -1895,7 +1895,8 @@ def build_watchlist_opps(opps):
 
         # ── Confidence + MOS ─────────────────────────────────────────
         if cs or mos_pct:
-            conf_bar  = "█" * int(cs // 20) + "░" * (5 - int(cs // 20))
+            filled   = min(int(cs // 20), 5)
+            conf_bar = "█" * filled + "░" * (5 - filled)
             parts.append(
                 f"   Confidence: {code(conf_bar)} {cs:.0f}% | "
                 f"MOS required: {code(str(mos_pct) + '%')}"
