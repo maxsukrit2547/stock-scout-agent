@@ -731,12 +731,83 @@ def analyze_url(url, portfolio):
     return call_gemini(prompt, max_tokens=1500, model=MODEL_DEEP)
 
 
-def analyze_question(text, portfolio):
+def analyze_question(text, portfolio, last_deep_report=None):
+    # Build context from last deep report if available
+    report_context = ""
+    if last_deep_report:
+        try:
+            # Extract the most relevant parts compactly
+            exec_sum  = last_deep_report.get("executive_summary") or {}
+            per_stock = last_deep_report.get("per_stock_status") or {}
+            watchlist = last_deep_report.get("watchlist_opportunities") or []
+            earnings  = last_deep_report.get("earnings_this_week") or []
+            actions   = last_deep_report.get("action_priorities") or {}
+
+            lines = ["=== LAST DEEP RESEARCH REPORT ==="]
+
+            if exec_sum:
+                lines.append(
+                    f"Status: {exec_sum.get('overall_status','')} | "
+                    f"Risk: {exec_sum.get('risk','')} | "
+                    f"Opportunity: {exec_sum.get('opportunity','')}"
+                )
+
+            # All per-stock verdicts
+            for color in ["green", "yellow", "red"]:
+                for s in (per_stock.get(color) or []):
+                    insider_note = f" | Insider: {s['insider']}" if s.get("insider") else ""
+                    lines.append(
+                        f"{s['ticker']} [{color.upper()}]: {s.get('state','')} | "
+                        f"News: {s.get('news','—')}{insider_note} | "
+                        f"Action: {s.get('action','—')}"
+                    )
+
+            # Watchlist with fair values
+            for w in watchlist:
+                cur = w.get("current_price", "?")
+                fv  = w.get("fair_value_estimate", "?")
+                up  = w.get("upside_pct")
+                up_str = f" ({up:+.1f}%)" if up is not None else ""
+                lines.append(
+                    f"WATCHLIST {w.get('ticker','?')}: "
+                    f"current=${cur} fair_value=${fv}{up_str} | "
+                    f"thesis={w.get('thesis','')} | "
+                    f"why_now={w.get('why_now','')}"
+                )
+
+            # Earnings
+            for e in earnings:
+                lines.append(
+                    f"EARNINGS: {e['ticker']} on {e.get('date','?')} "
+                    f"({e.get('days','?')}d) — watch: {e.get('watch_for','')}"
+                )
+
+            # Actions
+            for t in (actions.get("trim_take_profits") or []):
+                lines.append(
+                    f"ACTION TRIM: {t['ticker']} — {t.get('action','')} | "
+                    f"trigger: {t.get('trigger','')}"
+                )
+            for t in (actions.get("monitor_for_exit") or []):
+                lines.append(
+                    f"ACTION WATCH: {t['ticker']} — {t.get('concern','')} | "
+                    f"watch: {t.get('watch_for','')}"
+                )
+
+            report_context = "\n".join(lines) + "\n\n"
+        except Exception as e:
+            print(f"report context err: {e}")
+            report_context = ""
+
     prompt = (
         f"User's portfolio: {portfolio_summary_str(portfolio)}\n\n"
+        f"{report_context}"
         f'User asked: "{text}"\n\n'
-        "Answer with portfolio context. If about a stock or news, analyze impact on holdings. "
-        "If general market question, give focused take. Use HTML for Telegram. Under 1000 chars."
+        "Answer with full context from the deep research report above if relevant. "
+        "If the user asks about a fair value, price target, or verdict that appears in the report, "
+        "explain exactly how it was calculated and what it means. "
+        "If about a stock or news, analyze impact on holdings. "
+        "Use HTML for Telegram. Under 1200 chars."
     )
     return call_gemini(prompt, max_tokens=1500, model=MODEL_DEEP)
 
