@@ -510,7 +510,9 @@ def fetch_fmp_financials(ticker):
 # ENHANCED VALUATION ENGINE
 # ===================================================================
 
-_risk_free_rate_cache = None  # cached per run
+_risk_free_rate_cache = None   # cached per run
+_macro_cache          = {}     # run-level cache for all macro signals
+
 
 def get_cached_rfr():
     global _risk_free_rate_cache
@@ -518,6 +520,372 @@ def get_cached_rfr():
         _risk_free_rate_cache = get_risk_free_rate()
     return _risk_free_rate_cache
 
+
+# ===================================================================
+# MACRO SIGNAL FETCHERS (all cached per run, zero tokens)
+# ===================================================================
+
+def fetch_vix_level():
+    """
+    VIX from yfinance. Measures near-term US equity uncertainty.
+    High VIX → WACC estimates unreliable (ERP widens unpredictably).
+    Basis: Flevy DCF Market Volatility 2024, ScienceDirect 2025.
+    Cached per run — only 1 API call total.
+    """
+    if "vix" in _macro_cache:
+        return _macro_cache["vix"]
+    try:
+        hist = yf.Ticker("^VIX").history(period="2d", interval="1d")
+        if not hist.empty:
+            val = round(float(hist["Close"].iloc[-1]), 2)
+            print(f"VIX: {val}")
+            _macro_cache["vix"] = val
+            return val
+    except Exception as e:
+        print(f"VIX fetch err: {e}")
+    _macro_cache["vix"] = 20.0
+    return 20.0
+
+
+def fetch_yield_curve_spread():
+    """
+    10yr - 2yr Treasury spread from FRED (DGS10 - DGS2).
+    Positive = normal curve. Negative = inverted = recession signal.
+    Measures DIFFERENT dimension from VIX (medium-term, not near-term).
+    Basis: Estrella & Mishkin 1998 — low correlation with VIX confirmed.
+    Cached per run.
+    """
+    if "yield_curve" in _macro_cache:
+        return _macro_cache["yield_curve"]
+    try:
+        def fred_last(sid):
+            r = requests.get(
+                f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}",
+                timeout=8,
+                headers={"User-Agent": "scout-agent/1.0"},
+            )
+            for line in reversed(r.text.strip().split("\n")):
+                p = line.split(",")
+                if len(p) == 2 and p[1].strip() not in ("", "."):
+                    return float(p[1].strip())
+            return None
+
+        t2  = fred_last("DGS2")
+        t10 = fred_last("DGS10")
+        if t2 and t10:
+            spread = round(t10 - t2, 3)
+            print(f"Yield curve (10yr-2yr): {spread:+.3f}%")
+            _macro_cache["yield_curve"] = spread
+            return spread
+    except Exception as e:
+        print(f"yield curve err: {e}")
+    _macro_cache["yield_curve"] = 0.5
+    return 0.5
+
+
+def fetch_credit_spread():
+    """
+    ICE BofA US High Yield OAS from FRED (BAMLH0A0HYM2).
+    Measures corporate funding stress — INDEPENDENT from VIX.
+    R²=50.71% between HY OAS and VIX (Fridson/LCD) → 49% is unique info.
+    Normal: 3-4%. Stressed: >6%. Crisis: >10%.
+    HALF-WEIGHTED in score to avoid double-counting VIX.
+    Cached per run.
+    """
+    if "credit_spread" in _macro_cache:
+        return _macro_cache["credit_spread"]
+    try:
+        r = requests.get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAMLH0A0HYM2",
+            timeout=10,
+            headers={"User-Agent": "scout-agent/1.0"},
+        )
+        for line in reversed(r.text.strip().split("\n")):
+            parts = line.split(",")
+            if len(parts) == 2 and parts[1].strip() not in ("", "."):
+                val = round(float(parts[1].strip()), 3)
+                print(f"HY Credit Spread (OAS): {val}%")
+                _macro_cache["credit_spread"] = val
+                return val
+    except Exception as e:
+        print(f"credit spread err: {e}")
+    _macro_cache["credit_spread"] = 4.0
+    return 4.0
+
+
+def fetch_inflation_regime():
+    """
+    CPI 3-month annualized rate from FRED (CPIAUCSL).
+    High inflation → WACC rises → DCF fair values decline.
+    Used as REGIME signal (hot/normal/cool), not precise forecast.
+    Basis: Sound economic theory — inflation directly raises WACC.
+    Cached per run.
+    """
+    if "inflation" in _macro_cache:
+        return _macro_cache["inflation"]
+    try:
+        r = requests.get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL",
+            timeout=10,
+            headers={"User-Agent": "scout-agent/1.0"},
+        )
+        lines = r.text.strip().split("\n")
+        readings = []
+        for line in reversed(lines):
+            p = line.split(",")
+            if len(p) == 2 and p[1].strip() not in ("", "."):
+                readings.append(float(p[1].strip()))
+            if len(readings) >= 4:
+                break
+        if len(readings) >= 4:
+            mom = round(((readings[0] / readings[3]) ** 4 - 1) * 100, 2)
+            print(f"CPI 3m annualized: {mom:+.2f}%")
+            _macro_cache["inflation"] = mom
+            return mom
+    except Exception as e:
+        print(f"inflation regime err: {e}")
+    _macro_cache["inflation"] = 2.5
+    return 2.5
+
+
+def fetch_fed_funds_level():
+    """
+    Current FEDFUNDS effective rate from FRED.
+    High rate = restrictive environment = WACC assumptions unreliable.
+    Simple current-level check — no dot plot prediction needed.
+    Historical neutral Fed funds rate ≈ 2.5%.
+    Cached per run.
+    """
+    if "fed_level" in _macro_cache:
+        return _macro_cache["fed_level"]
+    try:
+        r = requests.get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv?id=FEDFUNDS",
+            timeout=8,
+            headers={"User-Agent": "scout-agent/1.0"},
+        )
+        for line in reversed(r.text.strip().split("\n")):
+            parts = line.split(",")
+            if len(parts) == 2 and parts[1].strip() not in ("", "."):
+                val = round(float(parts[1].strip()), 3)
+                print(f"FEDFUNDS: {val}%")
+                _macro_cache["fed_level"] = val
+                return val
+    except Exception as e:
+        print(f"fed funds err: {e}")
+    _macro_cache["fed_level"] = 4.0
+    return 4.0
+
+
+def fetch_stock_iv(ticker):
+    """
+    ATM implied volatility from yfinance options chain.
+    IV/HV ratio > 1 means market prices a near-term specific event.
+    Static valuation less actionable when IV >> HV.
+    Uses nearest expiry 15-45 days out. Stale outside market hours
+    but prior-day IV still valid for regime detection.
+    Cached per ticker per run.
+    """
+    cache_key = f"iv_{ticker}"
+    if cache_key in _macro_cache:
+        return _macro_cache[cache_key]
+    try:
+        tk   = yf.Ticker(ticker)
+        exps = tk.options
+        if not exps:
+            _macro_cache[cache_key] = None
+            return None
+
+        info  = tk.info or {}
+        price = info.get("currentPrice") or info.get("regularMarketPrice")
+        if not price:
+            _macro_cache[cache_key] = None
+            return None
+
+        today     = datetime.now(timezone.utc).replace(tzinfo=None).date()
+        target_exp = None
+        for exp in exps:
+            try:
+                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+                days_out = (exp_date - today).days
+                if 15 <= days_out <= 45:
+                    target_exp = exp
+                    break
+            except Exception:
+                continue
+
+        if not target_exp:
+            _macro_cache[cache_key] = None
+            return None
+
+        chain = tk.option_chain(target_exp)
+        calls = chain.calls
+        if calls.empty:
+            _macro_cache[cache_key] = None
+            return None
+
+        calls = calls.dropna(subset=["impliedVolatility"])
+        calls["dist"] = abs(calls["strike"] - price)
+        atm = calls.nsmallest(3, "dist")
+        iv  = float(atm["impliedVolatility"].mean())
+
+        if iv <= 0 or iv > 5:
+            _macro_cache[cache_key] = None
+            return None
+
+        iv_pct = round(iv * 100, 1)
+        print(f"Stock IV {ticker}: {iv_pct}%")
+        _macro_cache[cache_key] = iv_pct
+        return iv_pct
+    except Exception as e:
+        print(f"stock iv err {ticker}: {e}")
+        _macro_cache[cache_key] = None
+        return None
+
+
+def score_news_sentiment(ticker, recent_headlines):
+    """
+    One tiny Gemini call (~20 tokens) to score news sentiment.
+    Basis: Tetlock 2007 — media pessimism predicts market returns.
+    arxiv 2025 — macro+sentiment outperforms benchmark for vol forecasting.
+    Returns int -10 to +10. Cached per ticker per run.
+    """
+    cache_key = f"sentiment_{ticker}"
+    if cache_key in _macro_cache:
+        return _macro_cache[cache_key]
+    if not recent_headlines or recent_headlines == "(no recent news)":
+        _macro_cache[cache_key] = 0
+        return 0
+    headlines_short = recent_headlines[:400]
+    prompt = (
+        f'Stock:{ticker} Headlines:"{headlines_short}"\n'
+        'Sentiment impact on this stock valuation confidence?\n'
+        'Return ONLY: {"s":<int -10 to 10>}\n'
+        '-10=major negative,0=neutral,+10=very bullish catalyst'
+    )
+    raw = call_gemini(prompt, max_tokens=15, json_mode=True, model=MODEL_LIGHT)
+    try:
+        score = int(max(-10, min(10, round(float(json.loads(raw).get("s", 0))))))
+        _macro_cache[cache_key] = score
+        return score
+    except Exception:
+        _macro_cache[cache_key] = 0
+        return 0
+
+
+# ===================================================================
+# CONFIDENCE SCORE ADJUSTMENT FUNCTIONS (pure math, zero API calls)
+# ===================================================================
+
+def _vix_adjustment(vix):
+    """
+    High VIX inflates WACC estimation error by 20-40%.
+    (Flevy DCF Market Volatility 2024, ScienceDirect 2025)
+    VIX<15=calm, 15-20=normal, 20-25=elevated, 25-35=high, >35=crisis
+    """
+    if vix is None:   return 0
+    if vix < 15:      return +5
+    if vix < 20:      return  0
+    if vix < 25:      return -5
+    if vix < 35:      return -10
+    return -15
+
+
+def _credit_spread_adjustment(spread):
+    """
+    HY OAS — 49% independent of VIX (Gilchrist & Zakrajsek 2012).
+    HALF-WEIGHT applied: max ±7 instead of ±15 to prevent double-counting.
+    Normal <4%, stressed >6%, crisis >10%.
+    """
+    if spread is None: return 0
+    if spread < 3.0:   return +3   # very tight = risk-on
+    if spread < 4.0:   return +2   # normal
+    if spread < 5.0:   return  0   # mild widening
+    if spread < 7.0:   return -5   # stressed
+    return -7                       # crisis — half of full weight
+
+
+def _yield_curve_adjustment(spread):
+    """
+    10yr-2yr measures MEDIUM-TERM recession risk — different from VIX.
+    Affects DCF terminal growth rate reliability.
+    (Estrella & Mishkin 1998)
+    """
+    if spread is None: return 0
+    if spread > 1.0:   return +3
+    if spread > 0:     return  0
+    if spread > -0.5:  return -3
+    return -6
+
+
+def _inflation_adjustment(cpi_3m_ann):
+    """
+    Hot inflation → WACC rises → DCF estimates become stale quickly.
+    Used as regime signal only (data has 4-6 week lag).
+    """
+    if cpi_3m_ann is None: return 0
+    if cpi_3m_ann < 1.0:   return +3   # disinflation = WACC stable/falling
+    if cpi_3m_ann < 3.0:   return  0   # normal
+    if cpi_3m_ann < 5.0:   return -3   # elevated
+    return -6                            # hot = WACC assumptions stressed
+
+
+def _fed_level_adjustment(rate):
+    """
+    High rates = restrictive environment = WACC assumptions may keep rising.
+    Historical neutral ≈ 2.5%. Post-2022 rate (5.33%) = max restrictive.
+    """
+    if rate is None: return 0
+    if rate < 1.5:   return +4
+    if rate < 2.5:   return +2
+    if rate < 4.0:   return  0
+    if rate < 5.5:   return -3
+    return -5
+
+
+def _target_dispersion_adjustment(fund):
+    """
+    High analyst target dispersion = genuine uncertainty about intrinsic value.
+    (Diether et al. 2002, replicated Yale SOM 2024)
+    Dispersion = (high - low) / mean × 100%
+    """
+    if not fund:
+        return 0
+    try:
+        high = fund.get("target_high")
+        low  = fund.get("target_low")
+        mean = fund.get("target_mean")
+        if not all([high, low, mean]) or mean == 0:
+            return 0
+        dispersion = (high - low) / mean * 100
+        if dispersion < 20:   return +5   # tight consensus = reliable
+        if dispersion < 40:   return  0   # normal
+        if dispersion < 60:   return -5   # wide disagreement
+        return -10                         # extreme disagreement
+    except Exception:
+        return 0
+
+
+def _stock_iv_adjustment(stock_iv, hist_vol_pct):
+    """
+    IV/HV ratio > 1 = market sees specific near-term event risk.
+    Makes current static valuation less actionable right now.
+    IV < HV = calm, no near-term catalyst priced in.
+    """
+    if stock_iv is None or hist_vol_pct is None or hist_vol_pct <= 0:
+        return 0
+    ratio = stock_iv / hist_vol_pct
+    if ratio < 0.8:   return +3    # IV below HV = calm
+    if ratio < 1.2:   return  0    # normal
+    if ratio < 1.8:   return -4    # elevated near-term uncertainty
+    return -8                       # major event risk (earnings, FDA, etc.)
+
+
+def _news_sentiment_adjustment(sentiment_score):
+    """Scale Gemini -10/+10 to ±8 confidence adjustment."""
+    if sentiment_score is None:
+        return 0
+    return int(max(-8, min(8, sentiment_score)))
 
 def classify_stock_tier(fund, fh):
     """
