@@ -1408,6 +1408,8 @@ def run_deep():
     brief_data["watchlist_opportunities"] = enrich_watchlist_opps(
         brief_data.get("watchlist_opportunities") or [], cache
     )
+    cache["last_deep_report"] = brief_data
+    cache["last_deep_report_time"] = datetime.utcnow().strftime("%b %d, %Y %H:%M UTC")
     save_cache(cache)
     save_portfolio(portfolio)
     send_chunked(build_brief_sections(brief_data))
