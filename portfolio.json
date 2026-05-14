@@ -1,16 +1,62 @@
 {
-  "AMZN":  {"shares": 3.13269,  "avg_cost": 223.28},
-  "ASTS":  {"shares": 7.83626,  "avg_cost": 63.85},
-  "AVGO":  {"shares": 1.45697,  "avg_cost": 343.19},
-  "CRWD":  {"shares": 0.47362,  "avg_cost": 421.60},
-  "GOOGL": {"shares": 2.19189,  "avg_cost": 228.25},
-  "IONQ":  {"shares": 5.37155,  "avg_cost": 55.83},
-  "META":  {"shares": 0.63592,  "avg_cost": 635.96},
-  "MSFT":  {"shares": 1.15654,  "avg_cost": 432.61},
-  "MU":    {"shares": 2.83080,  "avg_cost": 211.67},
-  "NVDA":  {"shares": 4.06307,  "avg_cost": 147.78},
-  "ORCL":  {"shares": 1.56845,  "avg_cost": 260.92},
-  "RKLB":  {"shares": 16.84020, "avg_cost": 41.56},
-  "TSLA":  {"shares": 0.28565,  "avg_cost": 349.63},
-  "TSM":   {"shares": 1.87983,  "avg_cost": 265.50}
+  "AMZN": {
+    "avg_cost": 223.28,
+    "shares": 3.13269
+  },
+  "ASTS": {
+    "avg_cost": 63.85,
+    "shares": 7.83626
+  },
+  "AVGO": {
+    "avg_cost": 343.19,
+    "shares": 1.45697
+  },
+  "CRWD": {
+    "avg_cost": 421.6,
+    "shares": 0.47362
+  },
+  "GOOGL": {
+    "avg_cost": 228.25,
+    "shares": 2.19189
+  },
+  "IONQ": {
+    "avg_cost": 55.83,
+    "shares": 5.37155
+  },
+  "META": {
+    "avg_cost": 635.96,
+    "shares": 0.63592
+  },
+  "MSFT": {
+    "avg_cost": 432.61,
+    "shares": 1.15654
+  },
+  "MU": {
+    "avg_cost": 211.67,
+    "shares": 2.8308
+  },
+  "NVDA": {
+    "avg_cost": 147.78,
+    "shares": 4.06307
+  },
+  "ORCL": {
+    "avg_cost": 260.92,
+    "shares": 1.56845
+  },
+  "RKLB": {
+    "avg_cost": 41.56,
+    "shares": 16.8402
+  },
+  "TSLA": {
+    "avg_cost": 349.63,
+    "shares": 0.28565
+  },
+  "TSM": {
+    "avg_cost": 265.5,
+    "shares": 1.87983
+  },
+  "ZS": {
+    "avg_cost": 147.9,
+    "shares": 0.208919
+  }
 }
