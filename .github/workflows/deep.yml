@@ -1,0 +1,44 @@
+name: Stock Scout - Deep Research
+
+on:
+  schedule:
+    - cron: '30 11 * * 1-5'    # 18:30 BKK (11:30 UTC), weekdays ONLY
+  workflow_dispatch:            # manual trigger for testing
+
+permissions:
+  contents: write
+
+jobs:
+  deep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: scout_cache.json
+          key: scout-cache-${{ github.run_id }}
+          restore-keys: scout-cache-
+
+      - run: pip install google-genai feedparser requests yfinance pandas numpy
+
+      - name: Run deep research
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scout_agent.py deep   # ← always deep, no mode logic needed
+
+      - name: Save cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: scout_cache.json
+          key: scout-cache-${{ github.run_id }}
