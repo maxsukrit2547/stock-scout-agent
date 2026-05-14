@@ -332,6 +332,504 @@ def fetch_nasdaq_earnings_calendar(days_ahead=8):
 
     print(f"NASDAQ calendar: {len(calendar)} upcoming earnings fetched")
     return calendar
+# ===================================================================
+# DATA LAYER 2: FINNHUB + FMP + SEC EDGAR + FRED
+# ===================================================================
+
+def get_risk_free_rate():
+    """
+    Fetch 10-year US Treasury yield from FRED.
+    No API key required. Cached in memory per run.
+    """
+    try:
+        r = requests.get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10",
+            timeout=10,
+            headers={"User-Agent": "scout-agent/1.0"},
+        )
+        for line in reversed(r.text.strip().split("\n")):
+            parts = line.split(",")
+            if len(parts) == 2 and parts[1].strip() not in ("", "."):
+                rate = float(parts[1].strip()) / 100
+                print(f"Risk-free rate: {rate:.4f} ({rate*100:.2f}%)")
+                return rate
+    except Exception as e:
+        print(f"FRED err: {e}")
+    return 0.043  # fallback 4.3%
+
+
+def fetch_finnhub_earnings(ticker):
+    """
+    Fetch next earnings date from Finnhub.
+    More reliable than yfinance for small/mid caps.
+    Returns (date_str, days_until) or (None, None).
+    """
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        return None, None
+    try:
+        today = datetime.utcnow().date()
+        to_dt = today + timedelta(days=90)
+        r = requests.get(
+            "https://finnhub.io/api/v1/calendar/earnings",
+            params={
+                "symbol": ticker,
+                "from":   str(today - timedelta(days=1)),
+                "to":     str(to_dt),
+                "token":  api_key,
+            },
+            timeout=8,
+        )
+        if r.status_code != 200:
+            return None, None
+        items = (r.json().get("earningsCalendar") or [])
+        if not items:
+            return None, None
+        # First upcoming or today's
+        item = items[0]
+        date_str = item.get("date", "")
+        if not date_str:
+            return None, None
+        earn_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        days = (earn_date - today).days
+        return earn_date.strftime("%b %d"), days
+    except Exception as e:
+        print(f"finnhub earnings err {ticker}: {e}")
+        return None, None
+
+
+def fetch_finnhub_basic_financials(ticker):
+    """
+    Fetch key financial metrics from Finnhub.
+    Free tier: 60 calls/min.
+    Returns dict with 5-year historical P/E median and other metrics.
+    """
+    api_key = os.environ.get("FINNHUB_API_KEY")
+    if not api_key:
+        return {}
+    try:
+        r = requests.get(
+            "https://finnhub.io/api/v1/stock/metric",
+            params={"symbol": ticker, "metric": "all", "token": api_key},
+            timeout=8,
+        )
+        if r.status_code != 200:
+            return {}
+        data   = r.json()
+        metric = data.get("metric") or {}
+        series = data.get("series", {}).get("annual", {})
+
+        # Extract 5-year median P/E from annual series
+        pe_history = []
+        for entry in (series.get("pe") or []):
+            v = entry.get("v")
+            if v and v > 0 and v < 500:
+                pe_history.append(v)
+        pe_5yr_median = float(np.median(pe_history)) if pe_history else None
+
+        # Extract FCF history
+        fcf_history = []
+        for entry in (series.get("fcfPerShareAnnual") or []):
+            v = entry.get("v")
+            if v is not None:
+                fcf_history.append(v)
+        fcf_per_share_5yr_avg = float(np.mean(fcf_history)) if fcf_history else None
+
+        return {
+            "pe_5yr_median":         pe_5yr_median,
+            "pe_ttm":                metric.get("peBasicExclExtraTTM"),
+            "ev_ebitda_ttm":         metric.get("evEbitdaTTM"),
+            "ev_ebitda_5yr_avg":     metric.get("evEbitda5YAvg"),
+            "ps_ttm":                metric.get("psTTM"),
+            "pb_annual":             metric.get("pbAnnual"),
+            "beta":                  metric.get("beta"),
+            "debt_to_equity":        metric.get("totalDebt/totalEquityAnnual"),
+            "roe":                   metric.get("roeRfy"),
+            "roic":                  metric.get("roicRfy"),
+            "revenue_growth_3y":     metric.get("revenueGrowth3Y"),
+            "eps_growth_3y":         metric.get("epsGrowth3Y"),
+            "fcf_per_share_ttm":     metric.get("fcfPerShareTTM"),
+            "fcf_per_share_5yr_avg": fcf_per_share_5yr_avg,
+            "gross_margin":          metric.get("grossMarginTTM"),
+            "net_margin":            metric.get("netMarginTTM"),
+        }
+    except Exception as e:
+        print(f"finnhub financials err {ticker}: {e}")
+        return {}
+
+
+def fetch_fmp_financials(ticker):
+    """
+    Fetch 5-year income + cash flow data from FMP.
+    Free tier: 250 calls/day.
+    Returns dict with FCF and historical ratios.
+    """
+    api_key = os.environ.get("FMP_API_KEY")
+    if not api_key:
+        return {}
+    try:
+        # Cash flow statement (last 5 annual)
+        r = requests.get(
+            f"https://financialmodelingprep.com/api/v3/cash-flow-statement/{ticker}",
+            params={"limit": 5, "apikey": api_key},
+            timeout=10,
+        )
+        if r.status_code != 200 or not r.json():
+            return {}
+        statements = r.json()
+
+        fcf_list   = []
+        capex_list = []
+        for s in statements:
+            ocf   = s.get("operatingCashFlow") or 0
+            capex = abs(s.get("capitalExpenditure") or 0)
+            fcf   = ocf - capex
+            if fcf != 0:
+                fcf_list.append(fcf)
+            capex_list.append(capex)
+
+        latest_fcf = fcf_list[0] if fcf_list else None
+        avg_fcf    = float(np.mean(fcf_list)) if fcf_list else None
+
+        return {
+            "fcf_latest":   latest_fcf,
+            "fcf_3yr_avg":  float(np.mean(fcf_list[:3])) if len(fcf_list) >= 3 else avg_fcf,
+            "fcf_5yr_avg":  avg_fcf,
+            "fcf_history":  fcf_list,
+        }
+    except Exception as e:
+        print(f"fmp financials err {ticker}: {e}")
+        return {}
+
+
+# ===================================================================
+# ENHANCED VALUATION ENGINE
+# ===================================================================
+
+_risk_free_rate_cache = None  # cached per run
+
+def get_cached_rfr():
+    global _risk_free_rate_cache
+    if _risk_free_rate_cache is None:
+        _risk_free_rate_cache = get_risk_free_rate()
+    return _risk_free_rate_cache
+
+
+def classify_stock_tier(fund, fh):
+    """
+    Tier 1: Profitable, established (full DCF + relative)
+    Tier 2: Revenue-stage growth (simple DCF + relative)
+    Tier 3: Pre-revenue / speculative (relative + MOS only)
+    """
+    pe  = fund.get("pe") or fh.get("pe_ttm")
+    fcf = fh.get("fcf_per_share_ttm") or 0
+    ps  = fund.get("ps") or fh.get("ps_ttm") or 0
+
+    if pe and pe > 0 and pe < 200 and fcf > 0:
+        return 1
+    elif ps and 0 < ps < 40:
+        return 2
+    else:
+        return 3
+
+
+def compute_wacc(fund, fh):
+    """
+    WACC from CAPM (equity) + after-tax cost of debt.
+    Uses Finnhub beta and D/E ratio for accuracy.
+    """
+    rfr      = get_cached_rfr()
+    beta     = fh.get("beta") or 1.2
+    erp      = 0.055            # Damodaran equity risk premium
+    de_ratio = fh.get("debt_to_equity") or 0
+
+    cost_eq  = rfr + beta * erp
+
+    # D/E ratio from Finnhub is expressed as %, convert to decimal
+    if de_ratio > 0:
+        d = de_ratio / 100 if de_ratio > 3 else de_ratio
+        e = 1.0
+        w_d = d / (d + e)
+        w_e = e / (d + e)
+        cost_debt  = rfr + 0.02  # spread over risk-free
+        tax_rate   = 0.21
+        wacc = w_e * cost_eq + w_d * cost_debt * (1 - tax_rate)
+    else:
+        wacc = cost_eq  # no debt
+
+    return round(min(max(wacc, 0.06), 0.20), 4)  # cap between 6-20%
+
+
+def simple_dcf(fcf, growth_rate, wacc, terminal_growth=0.03, years=5):
+    """2-stage DCF. Returns total enterprise value (same currency as FCF)."""
+    try:
+        if wacc <= terminal_growth or fcf <= 0:
+            return None
+        pv = 0
+        for yr in range(1, years + 1):
+            pv += fcf * ((1 + growth_rate) ** yr) / ((1 + wacc) ** yr)
+        final_fcf = fcf * ((1 + growth_rate) ** years)
+        pv += (final_fcf * (1 + terminal_growth) / (wacc - terminal_growth)) / ((1 + wacc) ** years)
+        return pv
+    except Exception:
+        return None
+
+
+def reverse_dcf(current_price, fcf_per_share, wacc, shares_scale=1, terminal_growth=0.03, years=5):
+    """Binary search to find implied growth rate priced into current stock."""
+    try:
+        if not fcf_per_share or fcf_per_share <= 0:
+            return None
+        lo, hi = -0.30, 3.0
+        for _ in range(80):
+            mid = (lo + hi) / 2
+            implied = simple_dcf(fcf_per_share, mid, wacc, terminal_growth, years)
+            if implied is None:
+                return None
+            if implied < current_price:
+                lo = mid
+            else:
+                hi = mid
+        return round((lo + hi) / 2, 4)
+    except Exception:
+        return None
+
+
+def sensitivity_matrix(fcf_per_share, wacc, growth, terminal_growth=0.03, years=5):
+    """
+    3x3: WACC ±1% vs Terminal Growth ±0.5%.
+    Returns (min, base, max) for range display.
+    """
+    values = []
+    for dw in [-0.01, 0.0, 0.01]:
+        for dt in [-0.005, 0.0, 0.005]:
+            w  = wacc + dw
+            tg = terminal_growth + dt
+            if w <= tg:
+                continue
+            v = simple_dcf(fcf_per_share, growth, w, tg, years)
+            if v and v > 0:
+                values.append(round(v, 2))
+    if not values:
+        return None
+    return {
+        "min":  round(min(values), 2),
+        "base": round(sum(values) / len(values), 2),
+        "max":  round(max(values), 2),
+    }
+
+
+def compute_statistical_mos(vol, de_ratio):
+    """
+    MOS = base(15%) + volatility component + leverage component.
+    Higher risk → wider safety margin required.
+    """
+    base    = 0.15
+    vol_adj = min((vol or 0.35) * 0.5, 0.25)
+
+    if de_ratio is None or de_ratio < 0:
+        lev_adj = 0.05
+    elif de_ratio > 2.0:
+        lev_adj = 0.10
+    elif de_ratio > 1.0:
+        lev_adj = 0.05
+    else:
+        lev_adj = 0.0
+
+    return round(min(base + vol_adj + lev_adj, 0.50), 3)
+
+
+def compute_confidence_score(models, divergence_flag, fh_available, fmp_available):
+    """
+    Confidence 0–100 based on:
+    - Number of models that ran (data availability)
+    - Agreement between models
+    - No divergence flag
+    - Quality of data sources
+    """
+    n = len(models)
+    if n == 0:
+        return 0
+
+    values = [m["fair_value"] for m in models.values() if m.get("fair_value")]
+    if len(values) < 2:
+        agreement = 0.5
+    else:
+        spread    = max(values) - min(values)
+        avg       = sum(values) / len(values)
+        agreement = max(0, 1 - (spread / avg)) if avg > 0 else 0
+
+    source_bonus = 0.1 * int(fh_available) + 0.1 * int(fmp_available)
+    div_penalty  = -0.15 if divergence_flag else 0
+
+    score = (
+        min(n / 2, 1.0) * 0.35 +    # model coverage
+        agreement       * 0.40 +    # model agreement
+        source_bonus             +   # data quality
+        div_penalty                  # divergence penalty
+    )
+    return round(min(max(score, 0), 1.0) * 100, 1)
+
+
+def enhanced_valuation(ticker, cache):
+    """
+    Master valuation function.
+    Returns full analysis dict with confidence score, MOS, buy signal.
+    Data priority: Finnhub > FMP > yfinance (fallback).
+    """
+    fund = get_fundamentals(ticker, cache)
+    if not fund or not fund.get("price"):
+        return None
+
+    price = fund["price"]
+
+    # ── Fetch enhanced data ──────────────────────────────────────────
+    fh  = fetch_finnhub_basic_financials(ticker)
+    fmp = fetch_fmp_financials(ticker)
+
+    fh_available  = bool(fh)
+    fmp_available = bool(fmp)
+
+    # ── Classify tier ────────────────────────────────────────────────
+    tier = classify_stock_tier(fund, fh)
+
+    # ── Risk metrics ────────────────────────────────────────────────
+    vol      = compute_volatility(ticker)
+    de_ratio = fh.get("debt_to_equity")
+    if de_ratio and de_ratio > 3:
+        de_ratio = de_ratio / 100   # Finnhub sometimes returns % form
+
+    mos           = compute_statistical_mos(vol or 0.35, de_ratio)
+    alert_trigger = round(price * (1 - mos), 2)
+
+    result = {
+        "ticker":        ticker,
+        "tier":          tier,
+        "current_price": round(price, 2),
+        "mos":           mos,
+        "mos_pct":       round(mos * 100, 1),
+        "alert_trigger": alert_trigger,
+        "models":        {},
+        "final_fair_value":   None,
+        "confidence_score":   0,
+        "divergence_flag":    False,
+        "implied_growth":     None,
+        "historical_growth":  None,
+        "sensitivity":        None,
+        "buy_signal":         False,
+        "upside_pct":         None,
+        "data_sources":       [],
+    }
+
+    # ── Model 1: Relative Valuation (all tiers) ──────────────────────
+    # Use Finnhub 5-yr median P/E if available (better than fixed 22x)
+    pe_normal = fh.get("pe_5yr_median") or 22
+    ps_normal = 6
+    pb_normal = 4
+
+    pe  = fund.get("pe") or fh.get("pe_ttm")
+    ps  = fund.get("ps") or fh.get("ps_ttm")
+    pb  = fund.get("pb") or fh.get("pb_annual")
+    ev_ebitda = fh.get("ev_ebitda_ttm")
+    ev_ebitda_norm = fh.get("ev_ebitda_5yr_avg") or 15
+
+    relative_fv, relative_method = None, None
+
+    if pe and 0 < pe < 300:
+        relative_fv     = round(price * pe_normal / pe, 2)
+        relative_method = f"P/E ({pe_normal:.1f}x 5yr median ÷ current {pe:.1f}x)"
+    elif ev_ebitda and ev_ebitda > 0:
+        relative_fv     = round(price * ev_ebitda_norm / ev_ebitda, 2)
+        relative_method = f"EV/EBITDA ({ev_ebitda_norm:.1f}x avg ÷ current {ev_ebitda:.1f}x)"
+    elif ps and ps > 0:
+        relative_fv     = round(price * ps_normal / ps, 2)
+        relative_method = f"P/S ({ps_normal}x normal ÷ current {ps:.1f}x)"
+    elif pb and pb > 0:
+        relative_fv     = round(price * pb_normal / pb, 2)
+        relative_method = f"P/BV ({pb_normal}x normal ÷ current {pb:.1f}x)"
+
+    if relative_fv and relative_fv > 0:
+        result["models"]["relative"] = {
+            "fair_value": relative_fv,
+            "method":     relative_method,
+            "weight":     0.35 if tier == 1 else 0.60,
+        }
+        if fh_available:
+            result["data_sources"].append("Finnhub")
+
+    # ── Model 2: DCF (Tier 1 & 2 only) ──────────────────────────────
+    if tier in (1, 2):
+        # Best FCF source: FMP 3yr average > Finnhub TTM > yfinance
+        fcf_per_share = None
+        fcf_source    = None
+
+        if fmp.get("fcf_3yr_avg") and fund.get("price"):
+            shares  = (yf.Ticker(ticker).info or {}).get("sharesOutstanding")
+            if shares and shares > 0:
+                fcf_per_share = fmp["fcf_3yr_avg"] / shares
+                fcf_source    = "FMP 3yr avg FCF"
+                result["data_sources"].append("FMP")
+
+        if not fcf_per_share and fh.get("fcf_per_share_ttm"):
+            fcf_per_share = fh["fcf_per_share_ttm"]
+            fcf_source    = "Finnhub TTM FCF/share"
+
+        if fcf_per_share and fcf_per_share > 0:
+            rfr          = get_cached_rfr()
+            wacc         = compute_wacc(fund, fh)
+            hist_growth  = (fh.get("eps_growth_3y") or fund.get("growth") or 0.10)
+            hist_growth  = min(max(hist_growth, -0.20), 0.60)  # cap growth inputs
+            terminal_g   = min(rfr + 0.01, 0.04)
+
+            dcf_fv = simple_dcf(fcf_per_share, hist_growth, wacc, terminal_g)
+            if dcf_fv and dcf_fv > 0:
+                result["models"]["dcf"] = {
+                    "fair_value": round(dcf_fv, 2),
+                    "method":     f"2-stage DCF (WACC={wacc*100:.1f}%, g={hist_growth*100:.1f}%, source={fcf_source})",
+                    "weight":     0.65 if tier == 1 else 0.40,
+                }
+
+                # Sensitivity matrix
+                sens = sensitivity_matrix(fcf_per_share, wacc, hist_growth, terminal_g)
+                if sens:
+                    result["sensitivity"] = sens
+
+                # Reverse DCF — divergence check
+                implied_g = reverse_dcf(price, fcf_per_share, wacc, terminal_g)
+                if implied_g is not None and hist_growth > 0:
+                    result["implied_growth"]    = round(implied_g * 100, 2)
+                    result["historical_growth"] = round(hist_growth * 100, 2)
+                    result["divergence_flag"]   = implied_g > 2 * hist_growth
+                    if result["divergence_flag"]:
+                        result["data_sources"].append("⚠️ DivergenceFlag")
+
+    # ── Bayesian weighted average ────────────────────────────────────
+    total_w, weighted_sum = 0, 0
+    for m in result["models"].values():
+        fv = m.get("fair_value")
+        w  = m.get("weight", 0)
+        if fv and fv > 0 and w > 0:
+            weighted_sum += fv * w
+            total_w      += w
+
+    if total_w > 0:
+        result["final_fair_value"] = round(weighted_sum / total_w, 2)
+
+    # ── Confidence score ─────────────────────────────────────────────
+    result["confidence_score"] = compute_confidence_score(
+        result["models"],
+        result["divergence_flag"],
+        fh_available,
+        fmp_available,
+    )
+
+    # ── Buy signal ───────────────────────────────────────────────────
+    fv = result["final_fair_value"]
+    if fv:
+        result["upside_pct"] = round((fv - price) / price * 100, 1)
+        result["buy_signal"] = price < fv * (1 - mos)
+
+    return result
 
 
 # ===================================================================
