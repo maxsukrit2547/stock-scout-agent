@@ -1483,7 +1483,7 @@ def deep_research_data(cache, portfolio):
     sections = []
     earnings_this_week = []
 
-     # ── Pre-fetch earnings calendar from NASDAQ once (faster + more reliable) ──
+    # ── Pre-fetch earnings calendar from NASDAQ once (faster + more reliable) ──
     nasdaq_calendar = {}
     try:
         nasdaq_calendar = fetch_nasdaq_earnings_calendar(days_ahead=EARNINGS_HORIZON_DAYS + 1)
