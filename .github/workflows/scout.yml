@@ -2,17 +2,16 @@ name: Stock Scout Agent
 
 on:
   schedule:
-    - cron: '0 */4 * * 1-5'      # scout:  every 4h, weekdays
-    - cron: '30 11 * * 1-5'      # deep:   18:30 BKK (11:30 UTC), weekdays
-    - cron: '*/15 * * * 1-5'     # listen: every 15 min, weekdays only
+    - cron: '0 */4 * * 1-5'     # scout: every 4h, weekdays
+    - cron: '*/15 * * * 1-5'    # listen: every 15 min, weekdays
   workflow_dispatch:
     inputs:
       mode:
         description: 'Run mode'
         required: true
-        default: 'deep'
+        default: 'listen'
         type: choice
-        options: [scout, deep, listen]
+        options: [scout, listen]
 
 permissions:
   contents: write
@@ -20,7 +19,7 @@ permissions:
 jobs:
   agent:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,24 +43,16 @@ jobs:
           HOUR=$(date -u +%H)
           MIN=$(date -u +%M)
           DOW=$(date -u +%u)
-          TOTAL_MIN=$(( HOUR * 60 + MIN ))
 
-          echo "UTC time: ${HOUR}:${MIN} (${TOTAL_MIN} min), DOW: ${DOW}"
+          echo "UTC time: ${HOUR}:${MIN}, DOW: ${DOW}, event: ${{ github.event_name }}"
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             MODE="${{ inputs.mode }}"
-
-          # Deep window: 18:30–23:59 BKK = 11:30–16:59 UTC (TOTAL_MIN 690–1019)
-          elif [ "$DOW" -le 5 ] && [ "$TOTAL_MIN" -ge 690 ] && [ "$TOTAL_MIN" -le 1019 ]; then
-            MODE=deep
-
-          # Scout: top of every 4th hour on weekdays
           elif [ "$MIN" = "00" ] && [ "$DOW" -le 5 ]; then
             case "$HOUR" in
               00|04|08|12|16|20) MODE=scout ;;
               *) MODE=listen ;;
             esac
-
           else
             MODE=listen
           fi
