@@ -718,8 +718,18 @@ def fetch_stock_iv(ticker):
             _macro_cache[cache_key] = None
             return None
 
-        chain = tk.option_chain(target_exp)
+        try:
+            chain = tk.option_chain(target_exp)
+        except Exception:
+            _macro_cache[cache_key] = None
+            return None
+
         calls = chain.calls
+        if calls is None or calls.empty:
+            _macro_cache[cache_key] = None
+            return None
+        # ────────────────────────────────────────────────────────────
+
         if calls.empty:
             _macro_cache[cache_key] = None
             return None
