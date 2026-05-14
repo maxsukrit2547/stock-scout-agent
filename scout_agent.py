@@ -919,7 +919,7 @@ def process_telegram_messages(cache, portfolio):
     updates = telegram_get_updates(offset=last_offset + 1 if last_offset else None)
     if not updates:
         return portfolio
-
+    last_deep_report = cache.get("last_deep_report")
     p = portfolio
     for u in updates:
         try:
@@ -966,7 +966,7 @@ def process_telegram_messages(cache, portfolio):
                     telegram_send(f"📒 <b>Portfolio Update</b>\n\n{esc(conf)}")
                     continue
 
-            resp = analyze_question(text, p)
+            resp = analyze_question(text, p, last_deep_report=last_deep_report)
             if resp:
                 telegram_send(f"💬 <b>Analysis</b>\n\n{resp}")
 
