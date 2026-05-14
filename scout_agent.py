@@ -218,6 +218,9 @@ def get_fundamentals(ticker, cache):
             "sector":    info.get("sector",   ""),
             "industry":  info.get("industry", ""),
             "market_cap":info.get("marketCap"),
+            "target_high": info.get("targetHighPrice"),
+            "target_low":  info.get("targetLowPrice"),
+            "target_mean": info.get("targetMeanPrice"),
             "fetched_at":now,
         }
         cache["fundamentals"][key] = data
