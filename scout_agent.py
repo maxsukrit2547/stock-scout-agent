@@ -1011,36 +1011,88 @@ def compute_statistical_mos(vol, de_ratio):
     return round(min(base + vol_adj + lev_adj, 0.50), 3)
 
 
-def compute_confidence_score(models, divergence_flag, fh_available, fmp_available):
+def compute_confidence_score(
+    models,
+    divergence_flag,
+    fh_available,
+    fmp_available,
+    fund=None,
+    ticker=None,
+    vix=None,
+    yield_spread=None,
+    credit_spread=None,
+    inflation=None,
+    fed_level=None,
+    stock_iv=None,
+    hist_vol_pct=None,
+    news_sentiment=0,
+):
     """
-    Confidence 0–100 based on:
-    - Number of models that ran (data availability)
-    - Agreement between models
-    - No divergence flag
-    - Quality of data sources
+    Verified confidence score 0-100.
+    All factors have published empirical basis.
+    No double-counting. Macro factors affect WACC reliability.
+    Stock-specific factors affect valuation precision.
+
+    DROPPED (with reasons documented):
+      Fear & Greed  → VIX is literally component 6/7 of F&G (double-count)
+      Fed dot plot  → FEDTARMD has poor predictive accuracy (quarterly lag)
+      Short interest→ 2-4 week FINRA-confirmed lag = unreliable pre-market
+      Analyst consensus alignment → directional predictor, not confidence
+      Sector momentum → Moskowitz 1999 = return predictor, not confidence
     """
     n = len(models)
     if n == 0:
         return 0
 
+    # ── 1. Model coverage: 0-40 ──────────────────────────────────────
+    coverage = min(n, 2) * 20
+
+    # ── 2. Data quality: 0-10 ────────────────────────────────────────
+    data_qual = (7 if fh_available else 0) + (3 if fmp_available else 0)
+
+    # ── 3. Model agreement: 0-25 (honest: 0 if only 1 model) ─────────
     values = [m["fair_value"] for m in models.values() if m.get("fair_value")]
-    if len(values) < 2:
-        agreement = 0.5
+    if len(values) >= 2:
+        spread      = max(values) - min(values)
+        avg         = sum(values) / len(values)
+        agreement   = max(0.0, 1.0 - (spread / avg)) if avg > 0 else 0.0
+        agree_bonus = round(agreement * 25)
     else:
-        spread    = max(values) - min(values)
-        avg       = sum(values) / len(values)
-        agreement = max(0, 1 - (spread / avg)) if avg > 0 else 0
+        agree_bonus = 0
 
-    source_bonus = 0.1 * int(fh_available) + 0.1 * int(fmp_available)
-    div_penalty  = -0.15 if divergence_flag else 0
+    # ── 4. Analyst target dispersion: -10 to +5 ──────────────────────
+    disp_adj = _target_dispersion_adjustment(fund)
 
-    score = (
-        min(n / 2, 1.0) * 0.35 +    # model coverage
-        agreement       * 0.40 +    # model agreement
-        source_bonus             +   # data quality
-        div_penalty                  # divergence penalty
+    # ── 5. Divergence penalty: -15 ───────────────────────────────────
+    div_penalty = -15 if divergence_flag else 0
+
+    # ── 6. Macro environment (WACC & input reliability) ──────────────
+    vix_adj  = _vix_adjustment(vix)
+    cs_adj   = _credit_spread_adjustment(credit_spread)   # half-weighted
+    yc_adj   = _yield_curve_adjustment(yield_spread)
+    inf_adj  = _inflation_adjustment(inflation)
+    fed_adj  = _fed_level_adjustment(fed_level)
+
+    # ── 7. Stock-specific ─────────────────────────────────────────────
+    iv_adj   = _stock_iv_adjustment(stock_iv, hist_vol_pct)
+    news_adj = _news_sentiment_adjustment(news_sentiment)
+
+    raw = (coverage + data_qual + agree_bonus + disp_adj + div_penalty
+           + vix_adj + cs_adj + yc_adj + inf_adj + fed_adj
+           + iv_adj + news_adj)
+
+    final = round(min(max(raw, 0), 100), 1)
+
+    print(
+        f"Confidence [{ticker or '?'}]: "
+        f"cov={coverage} dq={data_qual} ag={agree_bonus} "
+        f"disp={disp_adj} div={div_penalty} | "
+        f"vix={vix_adj} cs={cs_adj} yc={yc_adj} "
+        f"inf={inf_adj} fed={fed_adj} | "
+        f"iv={iv_adj} news={news_adj} → {final}%"
     )
-    return round(min(max(score, 0), 1.0) * 100, 1)
+    return final
+
 
 
 def enhanced_valuation(ticker, cache):
