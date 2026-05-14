@@ -199,7 +199,7 @@ def fetch_ticker_news(ticker, limit=10):
 def get_fundamentals(ticker, cache):
     key    = ticker.upper()
     cached = cache["fundamentals"].get(key)
-    now    = datetime.utcnow().timestamp()
+    now    = datetime.now(timezone.utc).replace(tzinfo=None).timestamp()
     if cached and (now - cached.get("fetched_at", 0)) < 86400:
         return cached
     try:
@@ -252,7 +252,7 @@ def get_next_earnings(ticker):
             date = date.to_pydatetime()
         if hasattr(date, "tzinfo") and date.tzinfo:
             date = date.replace(tzinfo=None)
-        today_utc = datetime.utcnow().date()
+        today_utc = datetime.now(timezone.utc).replace(tzinfo=None).date()
         earn_date_only = date.date() if hasattr(date, "date") else date
         days = (earn_date_only - today_utc).days
         return date.strftime("%b %d"), days
@@ -272,7 +272,7 @@ def get_insider_activity(ticker, days=INSIDER_LOOKBACK_DAYS):
         )
         if date_col:
             df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-            cutoff = datetime.utcnow() - timedelta(days=days)
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
             df = df[df[date_col] >= cutoff]
         if len(df) == 0:
             return None
@@ -304,7 +304,7 @@ def fetch_nasdaq_earnings_calendar(days_ahead=8):
     No API key required.
     Returns dict: { 'TICKER': ('May 11', days_from_today) }
     """
-    today_utc = datetime.utcnow().date()
+    today_utc = datetime.now(timezone.utc).replace(tzinfo=None).date()
     calendar  = {}
     headers   = {
         "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -369,7 +369,7 @@ def fetch_finnhub_earnings(ticker):
     if not api_key:
         return None, None
     try:
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).replace(tzinfo=None).date()
         to_dt = today + timedelta(days=90)
         r = requests.get(
             "https://finnhub.io/api/v1/calendar/earnings",
@@ -968,7 +968,7 @@ def check_drawdown_alert(portfolio_value, cache):
     peak = cache.get("portfolio_peak_value", 0) or 0
     if portfolio_value > peak:
         cache["portfolio_peak_value"]     = portfolio_value
-        cache["peak_date"]                = datetime.utcnow().strftime("%b %d")
+        cache["peak_date"]                = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%b %d")
         cache["last_drawdown_alert_level"] = None
         return None
     if peak <= 0:
@@ -1635,7 +1635,7 @@ def _market_status():
       Weekend gap  → '1d Xh Ym to US open'
     Handles EDT (UTC-4) and EST (UTC-5) automatically — no extra libraries needed.
     """
-    now_utc = datetime.utcnow()
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     year    = now_utc.year
 
     # ── DST: 2nd Sunday of March → 1st Sunday of November ──────────
@@ -1692,7 +1692,7 @@ def _market_status():
 
 
 def build_header():
-    bkk        = datetime.utcnow() + timedelta(hours=7)
+    bkk        = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=7)
     market_str = _market_status()
     return (
         f"📊 {bold('PRE-MARKET DEEP RESEARCH')}\n"
@@ -2152,7 +2152,7 @@ def run_deep():
         brief_data.get("watchlist_opportunities") or [], cache
     )
     cache["last_deep_report"] = brief_data
-    cache["last_deep_report_time"] = datetime.utcnow().strftime("%b %d, %Y %H:%M UTC")
+    cache["last_deep_report_time"] = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%b %d, %Y %H:%M UTC")
     save_cache(cache)
     save_portfolio(portfolio)
     send_chunked(build_brief_sections(brief_data))
