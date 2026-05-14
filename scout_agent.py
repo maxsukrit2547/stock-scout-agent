@@ -765,7 +765,7 @@ def enhanced_valuation(ticker, cache):
         fcf_source    = None
 
         if fmp.get("fcf_3yr_avg") and fund.get("price"):
-            shares  = (yf.Ticker(ticker).info or {}).get("sharesOutstanding")
+            shares = fund.get("shares_outstanding")
             if shares and shares > 0:
                 fcf_per_share = fmp["fcf_3yr_avg"] / shares
                 fcf_source    = "FMP 3yr avg FCF"
