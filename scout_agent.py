@@ -1239,13 +1239,35 @@ def enhanced_valuation(ticker, cache):
     if total_w > 0:
         result["final_fair_value"] = round(weighted_sum / total_w, 2)
 
+        # ── Gather macro signals (all cached per run) ────────────────────
+    vix          = fetch_vix_level()
+    yield_spread = fetch_yield_curve_spread()
+    credit_spread= fetch_credit_spread()
+    inflation    = fetch_inflation_regime()
+    fed_level    = fetch_fed_funds_level()
+    stock_iv     = fetch_stock_iv(ticker)
+    hist_vol_pct = round(vol * 100, 1) if vol else None
+    recent_news  = fetch_ticker_news(ticker, limit=5)
+    news_score   = score_news_sentiment(ticker, recent_news)
+
     # ── Confidence score ─────────────────────────────────────────────
     result["confidence_score"] = compute_confidence_score(
-        result["models"],
-        result["divergence_flag"],
-        fh_available,
-        fmp_available,
+        models        = result["models"],
+        divergence_flag = result["divergence_flag"],
+        fh_available  = fh_available,
+        fmp_available = fmp_available,
+        fund          = fund,
+        ticker        = ticker,
+        vix           = vix,
+        yield_spread  = yield_spread,
+        credit_spread = credit_spread,
+        inflation     = inflation,
+        fed_level     = fed_level,
+        stock_iv      = stock_iv,
+        hist_vol_pct  = hist_vol_pct,
+        news_sentiment= news_score,
     )
+
 
     # ── Buy signal ───────────────────────────────────────────────────
     fv = result["final_fair_value"]
