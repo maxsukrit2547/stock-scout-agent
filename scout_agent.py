@@ -1838,23 +1838,125 @@ def build_watchlist_opps(opps):
     if not opps:
         parts.append("\n<i>No clear setups outside your portfolio today.</i>")
         return "\n".join(parts)
+
+    tier_labels = {1: "Profitable", 2: "Growth", 3: "Speculative"}
+
     for o in opps[:3]:
-        line = f"\n• {code('$' + (o.get('ticker') or ''))} — {esc(o.get('thesis', ''))}"
+        ticker       = o.get("ticker") or ""
+        cur          = o.get("current_price")
+        ai_fv        = o.get("fair_value_estimate")
+        ver_fv       = o.get("verified_fair_value")
+        cs           = o.get("confidence_score", 0)
+        mos_pct      = o.get("mos_pct")
+        alert_trig   = o.get("alert_trigger")
+        upside       = o.get("upside_pct")
+        ver_upside   = o.get("verified_upside_pct")
+        diverged     = o.get("divergence_flag", False)
+        buy_sig      = o.get("buy_signal", False)
+        sensitivity  = o.get("sensitivity")
+        tier         = o.get("tier", 3)
+        sources      = o.get("data_sources", [])
+        is_overvalued = (ver_upside is not None and ver_upside < 0)
+
+        # ── Header ──────────────────────────────────────────────────
+        tier_str = tier_labels.get(tier, "")
+        parts.append(
+            f"\n• {code('$' + ticker)} "
+            f"<i>[{tier_str}]</i> — {esc(o.get('thesis', ''))}"
+        )
+
+        # ── Why now ─────────────────────────────────────────────────
         if o.get("why_now"):
-            line += f"\n   <i>Why now: {esc(o['why_now'])}</i>"
-        cur = o.get("current_price")
-        fv  = o.get("fair_value_estimate")
-        if cur and fv:
-            line += f"\n   Current: {code('$' + str(cur))} · Fair value: {code('$' + str(fv))}"
-            up = o.get("upside_pct")
-            if up is not None:
-                line += f" ({code('{:+.1f}%'.format(up))})"
-        elif cur:
-            line += f"\n   Current: {code('$' + str(cur))}"
-        elif fv:
-            line += f"\n   Fair value est: {code('$' + str(fv))}"
-        parts.append(line)
+            parts.append(f"   <i>Why now: {esc(o['why_now'])}</i>")
+
+        # ── Price line ───────────────────────────────────────────────
+        if cur:
+            price_line = f"   Current: {code('$' + str(cur))}"
+            if ver_fv:
+                up_str = f" ({code('{:+.1f}%'.format(ver_upside))})" if ver_upside is not None else ""
+                price_line += f" · Quant FV: {code('$' + str(ver_fv))}{up_str}"
+            parts.append(price_line)
+
+        # ── Confidence + MOS ─────────────────────────────────────────
+        if cs or mos_pct:
+            conf_bar  = "█" * int(cs // 20) + "░" * (5 - int(cs // 20))
+            parts.append(
+                f"   Confidence: {code(conf_bar)} {cs:.0f}% | "
+                f"MOS required: {code(str(mos_pct) + '%')}"
+            )
+
+        # ── Models used ──────────────────────────────────────────────
+        models = o.get("models", {})
+        for mname, m in models.items():
+            fv   = m.get("fair_value")
+            meth = m.get("method", "")
+            w    = m.get("weight", 0)
+            if fv:
+                parts.append(
+                    f"   📐 {bold(mname.upper())}: "
+                    f"{code('$' + str(fv))} "
+                    f"<i>({esc(meth)}, weight={int(w*100)}%)</i>"
+                )
+
+        # ── Sensitivity range (DCF only) ─────────────────────────────
+        if sensitivity:
+            parts.append(
+                f"   📊 Sensitivity range: "
+                f"{code('$' + str(sensitivity['min']))} – "
+                f"{code('$' + str(sensitivity['max']))} "
+                f"<i>(WACC ±1%, TG ±0.5%)</i>"
+            )
+
+        # ── Divergence warning ───────────────────────────────────────
+        if diverged:
+            ig  = o.get("implied_growth")
+            hg  = o.get("historical_growth")
+            parts.append(
+                f"   🚨 <b>Divergence Error:</b> <i>Market prices in "
+                f"{ig:.0f}% growth vs {hg:.0f}% historical — "
+                f"valuation requires belief in acceleration</i>"
+            )
+
+        # ── AI vs quant cross check ──────────────────────────────────
+        if ai_fv and ver_fv:
+            disc = o.get("fv_discrepancy_pct", 0)
+            if o.get("fv_verified"):
+                parts.append(
+                    f"   ✅ <i>AI estimate ${ai_fv} within "
+                    f"{disc:.0f}% of quant ${ver_fv} — consistent</i>"
+                )
+            else:
+                parts.append(
+                    f"   ⚠️ <i>AI estimate ${ai_fv} diverges "
+                    f"{disc:.0f}% from quant ${ver_fv} — "
+                    f"treat AI figure with caution</i>"
+                )
+
+        # ── Buy signal ───────────────────────────────────────────────
+        if buy_sig and alert_trig:
+            parts.append(
+                f"   🟢 {bold('BUY SIGNAL ACTIVE')} — "
+                f"price below MOS trigger {code('$' + str(alert_trig))}"
+            )
+        elif alert_trig:
+            parts.append(
+                f"   👁️ Watch for entry below {code('$' + str(alert_trig))} "
+                f"(MOS trigger)"
+            )
+
+        # ── Why watch despite overvaluation ─────────────────────────
+        if is_overvalued:
+            why = o.get("why_watch_despite_overvaluation", "")
+            if why:
+                parts.append(f"\n   💡 {bold('Still interesting:')} <i>{esc(why)}</i>")
+
+        # ── Data sources ─────────────────────────────────────────────
+        clean_sources = [s for s in sources if "Divergence" not in s]
+        if clean_sources:
+            parts.append(f"   <i>Sources: {esc(', '.join(clean_sources))}</i>")
+
     return "\n".join(parts)
+
 
 
 def build_brief_sections(brief_data):
