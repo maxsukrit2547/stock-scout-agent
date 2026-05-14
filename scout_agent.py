@@ -1563,7 +1563,16 @@ def deep_research_data(cache, portfolio):
         '    "red":    []\n'
         "  },\n"
         '  "sector_trends": [{"sector":"...","trend":"...","your_exposure":["..."],"outlook":"..."}],\n'
-        '  "watchlist_opportunities": [{"ticker":"AMD","thesis":"...","why_now":"...","fair_value_estimate":220}]\n'
+        '  "watchlist_opportunities": [\n'
+        '    {\n'
+        '      "ticker": "AMD",\n'
+        '      "thesis": "one line investment thesis",\n'
+        '      "why_now": "specific near-term catalyst",\n'
+        '      "fair_value_estimate": 220,\n'
+        '      "why_watch_despite_overvaluation": "required if stock trades above fair value"\n'
+        '    }\n'
+        '  ]\n'
+
         "}\n\n"
         "Rules:\n"
         "- DO NOT include raw indicator numbers (RSI, P/E, etc.). Only verdicts.\n"
@@ -1572,6 +1581,10 @@ def deep_research_data(cache, portfolio):
         "- watch_at_open: exactly 3. macro_risks: exactly 3. action_priorities: max 5 combined.\n"
         "- sector_trends: 2-4 megatrends. watchlist_opportunities: 2-3 non-portfolio names.\n"
         "- All text concise for mobile."
+        "- watchlist_opportunities: 2-3 non-portfolio names. "
+        "- fair_value_estimate must be your genuine estimate, not current price. "
+        "- why_watch_despite_overvaluation is REQUIRED if stock > fair_value_estimate.\n"
+
     )
 
     raw = call_gemini(prompt, max_tokens=10000, model=MODEL_DEEP, json_mode=True)
