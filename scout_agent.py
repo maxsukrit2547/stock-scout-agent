@@ -1924,11 +1924,12 @@ def build_watchlist_opps(opps):
         if diverged:
             ig  = o.get("implied_growth")
             hg  = o.get("historical_growth")
-            parts.append(
-                f"   🚨 <b>Divergence Error:</b> <i>Market prices in "
-                f"{ig:.0f}% growth vs {hg:.0f}% historical — "
-                f"valuation requires belief in acceleration</i>"
-            )
+            if ig is not None and hg is not None:
+                parts.append(
+                    f"   🚨 <b>Divergence Error:</b> <i>Market prices in "
+                    f"{ig:.0f}% growth vs {hg:.0f}% historical — "
+                    f"valuation requires belief in acceleration</i>"
+                )
 
         # ── AI vs quant cross check ──────────────────────────────────
         if ai_fv and ver_fv:
