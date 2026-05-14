@@ -1053,6 +1053,12 @@ def compute_confidence_score(
     n = len(models)
     if n == 0:
         return 0
+    print(f"\n=== CONFIDENCE DEBUG [{ticker or '?'}] ===")
+    print(f"  models: {list(models.keys())}")
+    print(f"  fh={fh_available} fmp={fmp_available}")
+    print(f"  vix={vix} cs={credit_spread} yc={yield_spread}")
+    print(f"  inf={inflation} fed={fed_level}")
+    print(f"  iv={stock_iv} hist_vol={hist_vol_pct} news={news_sentiment}")
 
     # ── 1. Model coverage: 0-40 ──────────────────────────────────────
     coverage = min(n, 2) * 20
