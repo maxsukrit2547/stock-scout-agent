@@ -251,9 +251,9 @@ def get_next_earnings(ticker):
             date = date.to_pydatetime()
         if hasattr(date, "tzinfo") and date.tzinfo:
             date = date.replace(tzinfo=None)
-            today_utc = datetime.utcnow().date()
-            earn_date_only = date.date() if hasattr(date, "date") else date
-            days = (earn_date_only - today_utc).days
+        today_utc = datetime.utcnow().date()
+        earn_date_only = date.date() if hasattr(date, "date") else date
+        days = (earn_date_only - today_utc).days
         return date.strftime("%b %d"), days
     except Exception as e:
         print(f"earnings err {ticker}: {e}")
