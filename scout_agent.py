@@ -1006,19 +1006,36 @@ def send_drawdown_alert(alert):
 # GEMINI
 # ===================================================================
 def call_gemini(prompt, max_tokens=600, json_mode=False, model=None):
-    try:
-        config = types.GenerateContentConfig(
-            max_output_tokens=max_tokens,
-            temperature=0.3,
-            response_mime_type="application/json" if json_mode else None,
-        )
-        response = get_client().models.generate_content(
-            model=model or MODEL_LIGHT, contents=prompt, config=config,
-        )
-        return response.text or ("{}" if json_mode else "")
-    except Exception as e:
-        print(f"gemini err: {e}")
-        return "{}" if json_mode else ""
+    import time
+    config = types.GenerateContentConfig(
+        max_output_tokens=max_tokens,
+        temperature=0.3,
+        response_mime_type="application/json" if json_mode else None,
+    )
+    # Retry up to 3 times with exponential backoff for 503
+    for attempt in range(3):
+        try:
+            response = get_client().models.generate_content(
+                model=model or MODEL_LIGHT,
+                contents=prompt,
+                config=config,
+            )
+            return response.text or ("{}" if json_mode else "")
+        except Exception as e:
+            err_str = str(e)
+            # 503 = overloaded, retry after wait
+            if "503" in err_str or "UNAVAILABLE" in err_str:
+                wait = 10 * (attempt + 1)  # 10s, 20s, 30s
+                print(f"gemini 503 attempt {attempt+1}/3 — retrying in {wait}s...")
+                time.sleep(wait)
+                continue
+            # Other errors → fail immediately
+            print(f"gemini err: {e}")
+            return "{}" if json_mode else ""
+    # All retries exhausted
+    print("gemini err: all 3 retries failed (503 UNAVAILABLE)")
+    return "{}" if json_mode else ""
+
 
 
 def call_gemini_image(image_bytes, prompt, mime_type="image/jpeg", max_tokens=1500):
