@@ -464,42 +464,93 @@ def fetch_finnhub_basic_financials(ticker):
 
 def fetch_fmp_financials(ticker):
     """
-    Fetch cash flow data from FMP new stable endpoint.
-    Free tier: 250 calls/day, 5 years of annual data.
-    New stable API: ticker is ?symbol= param, not URL path.
+    Fetch FCF from FMP stable endpoint (verified correct URL).
+    Falls back to yfinance cashflow if FMP fails.
     """
     api_key = os.environ.get("FMP_API_KEY")
     if not api_key:
-        return {}
+        return _yfinance_fcf_fallback(ticker)
     try:
-        # ── Try new stable cash flow endpoint first ──────────────────
+        # VERIFIED correct URL: cash-flow-statement (not cashflow-statement)
         r = requests.get(
-            "https://financialmodelingprep.com/stable/cashflow-statement",
-            params={
-                "symbol": ticker,
-                "limit":  5,
-                "apikey": api_key,
-            },
-            timeout=15,
+            "https://financialmodelingprep.com/stable/cash-flow-statement",
+            params={"symbol": ticker, "limit": 5, "apikey": api_key},
+            timeout=10,
         )
         print(f"FMP status {ticker}: {r.status_code}")
-
-        if r.status_code == 200 and r.json():
+        if r.status_code == 200:
             data = r.json()
-            # Check for error message in response
-            if isinstance(data, dict) and data.get("Error Message"):
-                print(f"FMP err {ticker}: {str(data)[:100]}")
-                return _fmp_key_metrics_fallback(ticker, api_key)
-            # Valid response — parse FCF
             if isinstance(data, list) and len(data) > 0:
-                return _parse_fmp_cashflow(data)
-
-        # ── Fallback to key-metrics endpoint ─────────────────────────
-        return _fmp_key_metrics_fallback(ticker, api_key)
-
+                result = _parse_fmp_cashflow(data)
+                if result:
+                    return result
+        # FMP failed → use yfinance
+        return _yfinance_fcf_fallback(ticker)
     except Exception as e:
         print(f"fmp financials err {ticker}: {e}")
+        return _yfinance_fcf_fallback(ticker)
+
+
+def _parse_fmp_cashflow(statements):
+    fcf_list = []
+    for s in statements:
+        ocf   = s.get("operatingCashFlow") or 0
+        capex = abs(s.get("capitalExpenditure") or 0)
+        fcf   = ocf - capex
+        if fcf != 0:
+            fcf_list.append(fcf)
+    if not fcf_list:
         return {}
+    avg_fcf = float(np.mean(fcf_list))
+    return {
+        "fcf_latest":  fcf_list[0],
+        "fcf_3yr_avg": float(np.mean(fcf_list[:3])) if len(fcf_list) >= 3 else avg_fcf,
+        "fcf_5yr_avg": avg_fcf,
+        "fcf_history": fcf_list,
+    }
+
+
+def _yfinance_fcf_fallback(ticker):
+    """
+    Get FCF from yfinance cashflow statement.
+    Already installed, no API key, no rate limit.
+    Uses annual Free Cash Flow directly.
+    """
+    try:
+        tk = yf.Ticker(ticker)
+        cf = tk.cashflow   # annual by default
+        if cf is None or cf.empty:
+            return {}
+
+        # Try direct FCF row first
+        if "Free Cash Flow" in cf.index:
+            fcf_series = cf.loc["Free Cash Flow"].dropna()
+            fcf_list   = [float(v) for v in fcf_series.values if v != 0]
+        else:
+            # Calculate: Operating Cash Flow - Capital Expenditure
+            ocf_row   = "Operating Cash Flow"
+            capex_row = "Capital Expenditure"
+            if ocf_row not in cf.index or capex_row not in cf.index:
+                return {}
+            ocf   = cf.loc[ocf_row].dropna()
+            capex = cf.loc[capex_row].dropna()
+            fcf_series = ocf - capex.abs()
+            fcf_list   = [float(v) for v in fcf_series.values if v != 0]
+
+        if not fcf_list:
+            return {}
+        avg_fcf = float(np.mean(fcf_list))
+        print(f"yfinance FCF fallback OK {ticker}: {len(fcf_list)} years")
+        return {
+            "fcf_latest":  fcf_list[0],
+            "fcf_3yr_avg": float(np.mean(fcf_list[:3])) if len(fcf_list) >= 3 else avg_fcf,
+            "fcf_5yr_avg": avg_fcf,
+            "fcf_history": fcf_list,
+        }
+    except Exception as e:
+        print(f"yfinance FCF fallback err {ticker}: {e}")
+        return {}
+
 
 
 def _parse_fmp_cashflow(statements):
@@ -621,68 +672,132 @@ def fetch_vix_level():
 
 def fetch_yield_curve_spread():
     """
-    10yr - 2yr Treasury spread from FRED (DGS10 - DGS2).
-    Positive = normal curve. Negative = inverted = recession signal.
-    Measures DIFFERENT dimension from VIX (medium-term, not near-term).
-    Basis: Estrella & Mishkin 1998 — low correlation with VIX confirmed.
+    10yr - 2yr spread from US Treasury XML API.
+    No API key, no rate limit, official government source.
+    More reliable than FRED from GitHub Actions.
     Cached per run.
     """
     if "yield_curve" in _macro_cache:
         return _macro_cache["yield_curve"]
     try:
+        year = datetime.now(timezone.utc).year
+        url  = (
+            "https://home.treasury.gov/resource-center/data-chart-center/"
+            f"interest-rates/pages/xml?data=daily_treasury_yield_curve"
+            f"&field_tdr_date_value={year}"
+        )
+        r = requests.get(url, timeout=10, headers={"User-Agent": "scout-agent/1.0"})
+        if r.status_code == 200:
+            # Parse last entry for BC_2YEAR and BC_10YEAR
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(r.content)
+            ns   = {"m": "http://schemas.microsoft.com/ado/2007/08/dataservices"}
+            entries = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+            if entries:
+                last = entries[-1]
+                t2  = last.find(".//m:BC_2YEAR",  ns)
+                t10 = last.find(".//m:BC_10YEAR", ns)
+                if t2 is not None and t10 is not None and t2.text and t10.text:
+                    spread = round(float(t10.text) - float(t2.text), 3)
+                    print(f"Yield curve (10yr-2yr): {spread:+.3f}% [Treasury XML]")
+                    _macro_cache["yield_curve"] = spread
+                    return spread
+    except Exception as e:
+        print(f"yield curve err: {e}")
+    # Fallback to FRED (best-effort)
+    try:
         def fred_last(sid):
             r = requests.get(
                 f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}",
-                timeout=15,
-                headers={"User-Agent": "scout-agent/1.0"},
+                timeout=5, headers={"User-Agent": "scout-agent/1.0"},
             )
             for line in reversed(r.text.strip().split("\n")):
                 p = line.split(",")
                 if len(p) == 2 and p[1].strip() not in ("", "."):
                     return float(p[1].strip())
             return None
-
         t2  = fred_last("DGS2")
         t10 = fred_last("DGS10")
         if t2 and t10:
             spread = round(t10 - t2, 3)
-            print(f"Yield curve (10yr-2yr): {spread:+.3f}%")
+            print(f"Yield curve: {spread:+.3f}% [FRED fallback]")
             _macro_cache["yield_curve"] = spread
             return spread
-    except Exception as e:
-        print(f"yield curve err: {e}")
+    except Exception:
+        pass
     _macro_cache["yield_curve"] = 0.5
     return 0.5
 
 
+
 def fetch_credit_spread():
-    """
-    ICE BofA US High Yield OAS from FRED (BAMLH0A0HYM2).
-    Measures corporate funding stress — INDEPENDENT from VIX.
-    R²=50.71% between HY OAS and VIX (Fridson/LCD) → 49% is unique info.
-    Normal: 3-4%. Stressed: >6%. Crisis: >10%.
-    HALF-WEIGHTED in score to avoid double-counting VIX.
-    Cached per run.
-    """
     if "credit_spread" in _macro_cache:
         return _macro_cache["credit_spread"]
     try:
         r = requests.get(
             "https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAMLH0A0HYM2",
-            timeout=10,
-            headers={"User-Agent": "scout-agent/1.0"},
+            timeout=5, headers={"User-Agent": "scout-agent/1.0"},
         )
         for line in reversed(r.text.strip().split("\n")):
             parts = line.split(",")
             if len(parts) == 2 and parts[1].strip() not in ("", "."):
                 val = round(float(parts[1].strip()), 3)
-                print(f"HY Credit Spread (OAS): {val}%")
+                print(f"HY Credit Spread: {val}%")
                 _macro_cache["credit_spread"] = val
                 return val
     except Exception as e:
         print(f"credit spread err: {e}")
     _macro_cache["credit_spread"] = 4.0
     return 4.0
+
+
+def fetch_inflation_regime():
+    if "inflation" in _macro_cache:
+        return _macro_cache["inflation"]
+    try:
+        r = requests.get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL",
+            timeout=5, headers={"User-Agent": "scout-agent/1.0"},
+        )
+        lines    = r.text.strip().split("\n")
+        readings = []
+        for line in reversed(lines):
+            p = line.split(",")
+            if len(p) == 2 and p[1].strip() not in ("", "."):
+                readings.append(float(p[1].strip()))
+            if len(readings) >= 4:
+                break
+        if len(readings) >= 4:
+            mom = round(((readings[0] / readings[3]) ** 4 - 1) * 100, 2)
+            print(f"CPI 3m annualized: {mom:+.2f}%")
+            _macro_cache["inflation"] = mom
+            return mom
+    except Exception as e:
+        print(f"inflation regime err: {e}")
+    _macro_cache["inflation"] = 2.5
+    return 2.5
+
+
+def fetch_fed_funds_level():
+    if "fed_level" in _macro_cache:
+        return _macro_cache["fed_level"]
+    try:
+        r = requests.get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv?id=FEDFUNDS",
+            timeout=5, headers={"User-Agent": "scout-agent/1.0"},
+        )
+        for line in reversed(r.text.strip().split("\n")):
+            parts = line.split(",")
+            if len(parts) == 2 and parts[1].strip() not in ("", "."):
+                val = round(float(parts[1].strip()), 3)
+                print(f"FEDFUNDS: {val}%")
+                _macro_cache["fed_level"] = val
+                return val
+    except Exception as e:
+        print(f"fed funds err: {e}")
+    _macro_cache["fed_level"] = 4.0
+    return 4.0
+
 
 
 def fetch_inflation_regime():
