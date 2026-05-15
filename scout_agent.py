@@ -462,23 +462,32 @@ def fetch_finnhub_basic_financials(ticker):
         return {}
 
 
-def _parse_fmp_cashflow(statements):
-    fcf_list = []
-    for s in statements:
-        ocf   = s.get("operatingCashFlow") or 0
-        capex = abs(s.get("capitalExpenditure") or 0)
-        fcf   = ocf - capex
-        if fcf != 0:
-            fcf_list.append(fcf)
-    if not fcf_list:
-        return {}
-    avg_fcf = float(np.mean(fcf_list))
-    return {
-        "fcf_latest":  fcf_list[0],
-        "fcf_3yr_avg": float(np.mean(fcf_list[:3])) if len(fcf_list) >= 3 else avg_fcf,
-        "fcf_5yr_avg": avg_fcf,
-        "fcf_history": fcf_list,
-    }
+def fetch_fmp_financials(ticker):
+    """
+    Fetch FCF from FMP stable endpoint.
+    Falls back to yfinance cashflow if FMP fails or key missing.
+    """
+    api_key = os.environ.get("FMP_API_KEY")
+    if not api_key:
+        return _yfinance_fcf_fallback(ticker)
+    try:
+        r = requests.get(
+            "https://financialmodelingprep.com/stable/cash-flow-statement",
+            params={"symbol": ticker, "limit": 5, "apikey": api_key},
+            timeout=10,
+        )
+        print(f"FMP status {ticker}: {r.status_code}")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list) and len(data) > 0:
+                result = _parse_fmp_cashflow(data)
+                if result:
+                    return result
+        return _yfinance_fcf_fallback(ticker)
+    except Exception as e:
+        print(f"fmp financials err {ticker}: {e}")
+        return _yfinance_fcf_fallback(ticker)
+
 
 
 def _yfinance_fcf_fallback(ticker):
