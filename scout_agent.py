@@ -490,6 +490,7 @@ def fetch_fmp_financials(ticker):
 
 
 
+
 def _yfinance_fcf_fallback(ticker):
     """
     Get FCF from yfinance cashflow statement.
@@ -530,31 +531,6 @@ def _yfinance_fcf_fallback(ticker):
     except Exception as e:
         print(f"yfinance FCF fallback err {ticker}: {e}")
         return {}
-
-
-
-def _parse_fmp_cashflow(statements):
-    """Parse FCF from FMP cash flow statement response."""
-    fcf_list = []
-    for s in statements:
-        ocf   = s.get("operatingCashFlow") or 0
-        capex = abs(s.get("capitalExpenditure") or 0)
-        fcf   = ocf - capex
-        if fcf != 0:
-            fcf_list.append(fcf)
-    if not fcf_list:
-        return {}
-    avg_fcf = float(np.mean(fcf_list))
-    return {
-        "fcf_latest":  fcf_list[0],
-        "fcf_3yr_avg": float(np.mean(fcf_list[:3])) if len(fcf_list) >= 3 else avg_fcf,
-        "fcf_5yr_avg": avg_fcf,
-        "fcf_history": fcf_list,
-    }
-
-
-
-
 
 # ===================================================================
 # ENHANCED VALUATION ENGINE
