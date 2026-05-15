@@ -382,7 +382,7 @@ def fetch_finnhub_earnings(ticker):
                 "to":     str(to_dt),
                 "token":  api_key,
             },
-            timeout=8,
+            timeout=15,
         )
         if r.status_code != 200:
             return None, None
@@ -415,7 +415,7 @@ def fetch_finnhub_basic_financials(ticker):
         r = requests.get(
             "https://finnhub.io/api/v1/stock/metric",
             params={"symbol": ticker, "metric": "all", "token": api_key},
-            timeout=8,
+            timeout=15,
         )
         if r.status_code != 200:
             return {}
@@ -561,7 +561,7 @@ def fetch_yield_curve_spread():
         def fred_last(sid):
             r = requests.get(
                 f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}",
-                timeout=8,
+                timeout=15,
                 headers={"User-Agent": "scout-agent/1.0"},
             )
             for line in reversed(r.text.strip().split("\n")):
@@ -661,7 +661,7 @@ def fetch_fed_funds_level():
     try:
         r = requests.get(
             "https://fred.stlouisfed.org/graph/fredgraph.csv?id=FEDFUNDS",
-            timeout=8,
+            timeout=15,
             headers={"User-Agent": "scout-agent/1.0"},
         )
         for line in reversed(r.text.strip().split("\n")):
