@@ -573,60 +573,7 @@ def _parse_fmp_cashflow(statements):
     }
 
 
-def _fmp_key_metrics_fallback(ticker, api_key):
-    """
-    Fallback: get FCF per share from FMP key-metrics endpoint.
-    This endpoint is confirmed available on free plan.
-    Multiplies by shares to get total FCF.
-    """
-    try:
-        r = requests.get(
-            "https://financialmodelingprep.com/stable/key-metrics",
-            params={
-                "symbol": ticker,
-                "limit":  5,
-                "apikey": api_key,
-            },
-            timeout=15,
-        )
-        if r.status_code != 200 or not r.json():
-            print(f"FMP key-metrics fallback failed {ticker}: {r.status_code}")
-            return {}
-        data = r.json()
-        if isinstance(data, dict) and data.get("Error Message"):
-            print(f"FMP key-metrics err {ticker}: {str(data)[:100]}")
-            return {}
-        if not isinstance(data, list) or len(data) == 0:
-            return {}
 
-        # Extract FCF per share history and convert to total FCF
-        fcf_ps_list = []
-        shares = None
-        for entry in data:
-            fcf_ps = entry.get("freeCashFlowPerShare")
-            if fcf_ps is not None and fcf_ps != 0:
-                fcf_ps_list.append(float(fcf_ps))
-            if shares is None:
-                shares = entry.get("sharesOutstanding") or entry.get("marketCap", 0) / max(entry.get("stockPrice", 1), 1)
-
-        if not fcf_ps_list:
-            return {}
-
-        # Convert per-share to total FCF using latest shares
-        if shares and shares > 0:
-            fcf_list = [ps * shares for ps in fcf_ps_list]
-            avg_fcf  = float(np.mean(fcf_list))
-            print(f"FMP key-metrics fallback OK {ticker}: {len(fcf_list)} years FCF")
-            return {
-                "fcf_latest":  fcf_list[0],
-                "fcf_3yr_avg": float(np.mean(fcf_list[:3])) if len(fcf_list) >= 3 else avg_fcf,
-                "fcf_5yr_avg": avg_fcf,
-                "fcf_history": fcf_list,
-            }
-        return {}
-    except Exception as e:
-        print(f"fmp key-metrics fallback err {ticker}: {e}")
-        return {}
 
 
 # ===================================================================
@@ -785,71 +732,6 @@ def fetch_fed_funds_level():
         r = requests.get(
             "https://fred.stlouisfed.org/graph/fredgraph.csv?id=FEDFUNDS",
             timeout=5, headers={"User-Agent": "scout-agent/1.0"},
-        )
-        for line in reversed(r.text.strip().split("\n")):
-            parts = line.split(",")
-            if len(parts) == 2 and parts[1].strip() not in ("", "."):
-                val = round(float(parts[1].strip()), 3)
-                print(f"FEDFUNDS: {val}%")
-                _macro_cache["fed_level"] = val
-                return val
-    except Exception as e:
-        print(f"fed funds err: {e}")
-    _macro_cache["fed_level"] = 4.0
-    return 4.0
-
-
-
-def fetch_inflation_regime():
-    """
-    CPI 3-month annualized rate from FRED (CPIAUCSL).
-    High inflation → WACC rises → DCF fair values decline.
-    Used as REGIME signal (hot/normal/cool), not precise forecast.
-    Basis: Sound economic theory — inflation directly raises WACC.
-    Cached per run.
-    """
-    if "inflation" in _macro_cache:
-        return _macro_cache["inflation"]
-    try:
-        r = requests.get(
-            "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL",
-            timeout=10,
-            headers={"User-Agent": "scout-agent/1.0"},
-        )
-        lines = r.text.strip().split("\n")
-        readings = []
-        for line in reversed(lines):
-            p = line.split(",")
-            if len(p) == 2 and p[1].strip() not in ("", "."):
-                readings.append(float(p[1].strip()))
-            if len(readings) >= 4:
-                break
-        if len(readings) >= 4:
-            mom = round(((readings[0] / readings[3]) ** 4 - 1) * 100, 2)
-            print(f"CPI 3m annualized: {mom:+.2f}%")
-            _macro_cache["inflation"] = mom
-            return mom
-    except Exception as e:
-        print(f"inflation regime err: {e}")
-    _macro_cache["inflation"] = 2.5
-    return 2.5
-
-
-def fetch_fed_funds_level():
-    """
-    Current FEDFUNDS effective rate from FRED.
-    High rate = restrictive environment = WACC assumptions unreliable.
-    Simple current-level check — no dot plot prediction needed.
-    Historical neutral Fed funds rate ≈ 2.5%.
-    Cached per run.
-    """
-    if "fed_level" in _macro_cache:
-        return _macro_cache["fed_level"]
-    try:
-        r = requests.get(
-            "https://fred.stlouisfed.org/graph/fredgraph.csv?id=FEDFUNDS",
-            timeout=15,
-            headers={"User-Agent": "scout-agent/1.0"},
         )
         for line in reversed(r.text.strip().split("\n")):
             parts = line.split(",")
@@ -1350,7 +1232,14 @@ def enhanced_valuation(ticker, cache):
 
     # ── Model 1: Relative Valuation (all tiers) ──────────────────────
     # Use Finnhub 5-yr median P/E if available (better than fixed 22x)
-    pe_normal = fh.get("pe_5yr_median") or 22
+    raw_pe_median = fh.get("pe_5yr_median")
+    if raw_pe_median and 8 < raw_pe_median < 60:
+        pe_normal = raw_pe_median
+    elif raw_pe_median and raw_pe_median >= 60:
+        pe_normal = 30    # cap — prevents IPO-year distortion (PLTR, etc.)
+    else:
+        pe_normal = 22
+
     ps_normal = 6
     pb_normal = 4
 
