@@ -462,35 +462,6 @@ def fetch_finnhub_basic_financials(ticker):
         return {}
 
 
-def fetch_fmp_financials(ticker):
-    """
-    Fetch FCF from FMP stable endpoint (verified correct URL).
-    Falls back to yfinance cashflow if FMP fails.
-    """
-    api_key = os.environ.get("FMP_API_KEY")
-    if not api_key:
-        return _yfinance_fcf_fallback(ticker)
-    try:
-        # VERIFIED correct URL: cash-flow-statement (not cashflow-statement)
-        r = requests.get(
-            "https://financialmodelingprep.com/stable/cash-flow-statement",
-            params={"symbol": ticker, "limit": 5, "apikey": api_key},
-            timeout=10,
-        )
-        print(f"FMP status {ticker}: {r.status_code}")
-        if r.status_code == 200:
-            data = r.json()
-            if isinstance(data, list) and len(data) > 0:
-                result = _parse_fmp_cashflow(data)
-                if result:
-                    return result
-        # FMP failed → use yfinance
-        return _yfinance_fcf_fallback(ticker)
-    except Exception as e:
-        print(f"fmp financials err {ticker}: {e}")
-        return _yfinance_fcf_fallback(ticker)
-
-
 def _parse_fmp_cashflow(statements):
     fcf_list = []
     for s in statements:
