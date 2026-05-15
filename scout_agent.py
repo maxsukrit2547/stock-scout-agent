@@ -464,45 +464,117 @@ def fetch_finnhub_basic_financials(ticker):
 
 def fetch_fmp_financials(ticker):
     """
-    Fetch 5-year income + cash flow data from FMP.
-    Free tier: 250 calls/day.
-    Returns dict with FCF and historical ratios.
+    Fetch cash flow data from FMP new stable endpoint.
+    Free tier: 250 calls/day, 5 years of annual data.
+    New stable API: ticker is ?symbol= param, not URL path.
     """
     api_key = os.environ.get("FMP_API_KEY")
     if not api_key:
         return {}
     try:
-        # Cash flow statement (last 5 annual)
+        # ── Try new stable cash flow endpoint first ──────────────────
         r = requests.get(
-            f"https://financialmodelingprep.com/api/v3/cash-flow-statement/{ticker}",
-            params={"limit": 5, "apikey": api_key},
-            timeout=10,
+            "https://financialmodelingprep.com/stable/cashflow-statement",
+            params={
+                "symbol": ticker,
+                "limit":  5,
+                "apikey": api_key,
+            },
+            timeout=15,
         )
-        if r.status_code != 200 or not r.json():
-            return {}
-        statements = r.json()
+        print(f"FMP status {ticker}: {r.status_code}")
 
-        fcf_list   = []
-        capex_list = []
-        for s in statements:
-            ocf   = s.get("operatingCashFlow") or 0
-            capex = abs(s.get("capitalExpenditure") or 0)
-            fcf   = ocf - capex
-            if fcf != 0:
-                fcf_list.append(fcf)
-            capex_list.append(capex)
+        if r.status_code == 200 and r.json():
+            data = r.json()
+            # Check for error message in response
+            if isinstance(data, dict) and data.get("Error Message"):
+                print(f"FMP err {ticker}: {str(data)[:100]}")
+                return _fmp_key_metrics_fallback(ticker, api_key)
+            # Valid response — parse FCF
+            if isinstance(data, list) and len(data) > 0:
+                return _parse_fmp_cashflow(data)
 
-        latest_fcf = fcf_list[0] if fcf_list else None
-        avg_fcf    = float(np.mean(fcf_list)) if fcf_list else None
+        # ── Fallback to key-metrics endpoint ─────────────────────────
+        return _fmp_key_metrics_fallback(ticker, api_key)
 
-        return {
-            "fcf_latest":   latest_fcf,
-            "fcf_3yr_avg":  float(np.mean(fcf_list[:3])) if len(fcf_list) >= 3 else avg_fcf,
-            "fcf_5yr_avg":  avg_fcf,
-            "fcf_history":  fcf_list,
-        }
     except Exception as e:
         print(f"fmp financials err {ticker}: {e}")
+        return {}
+
+
+def _parse_fmp_cashflow(statements):
+    """Parse FCF from FMP cash flow statement response."""
+    fcf_list = []
+    for s in statements:
+        ocf   = s.get("operatingCashFlow") or 0
+        capex = abs(s.get("capitalExpenditure") or 0)
+        fcf   = ocf - capex
+        if fcf != 0:
+            fcf_list.append(fcf)
+    if not fcf_list:
+        return {}
+    avg_fcf = float(np.mean(fcf_list))
+    return {
+        "fcf_latest":  fcf_list[0],
+        "fcf_3yr_avg": float(np.mean(fcf_list[:3])) if len(fcf_list) >= 3 else avg_fcf,
+        "fcf_5yr_avg": avg_fcf,
+        "fcf_history": fcf_list,
+    }
+
+
+def _fmp_key_metrics_fallback(ticker, api_key):
+    """
+    Fallback: get FCF per share from FMP key-metrics endpoint.
+    This endpoint is confirmed available on free plan.
+    Multiplies by shares to get total FCF.
+    """
+    try:
+        r = requests.get(
+            "https://financialmodelingprep.com/stable/key-metrics",
+            params={
+                "symbol": ticker,
+                "limit":  5,
+                "apikey": api_key,
+            },
+            timeout=15,
+        )
+        if r.status_code != 200 or not r.json():
+            print(f"FMP key-metrics fallback failed {ticker}: {r.status_code}")
+            return {}
+        data = r.json()
+        if isinstance(data, dict) and data.get("Error Message"):
+            print(f"FMP key-metrics err {ticker}: {str(data)[:100]}")
+            return {}
+        if not isinstance(data, list) or len(data) == 0:
+            return {}
+
+        # Extract FCF per share history and convert to total FCF
+        fcf_ps_list = []
+        shares = None
+        for entry in data:
+            fcf_ps = entry.get("freeCashFlowPerShare")
+            if fcf_ps is not None and fcf_ps != 0:
+                fcf_ps_list.append(float(fcf_ps))
+            if shares is None:
+                shares = entry.get("sharesOutstanding") or entry.get("marketCap", 0) / max(entry.get("stockPrice", 1), 1)
+
+        if not fcf_ps_list:
+            return {}
+
+        # Convert per-share to total FCF using latest shares
+        if shares and shares > 0:
+            fcf_list = [ps * shares for ps in fcf_ps_list]
+            avg_fcf  = float(np.mean(fcf_list))
+            print(f"FMP key-metrics fallback OK {ticker}: {len(fcf_list)} years FCF")
+            return {
+                "fcf_latest":  fcf_list[0],
+                "fcf_3yr_avg": float(np.mean(fcf_list[:3])) if len(fcf_list) >= 3 else avg_fcf,
+                "fcf_5yr_avg": avg_fcf,
+                "fcf_history": fcf_list,
+            }
+        return {}
+    except Exception as e:
+        print(f"fmp key-metrics fallback err {ticker}: {e}")
         return {}
 
 
